@@ -29,6 +29,19 @@ pub struct LogState {
     /// Total number of entries currently in the log, independent of
     /// the requested range.
     pub len: u64,
+
+    /// The value of the last non-hole entry across the *entire*
+    /// log (independent of the requested range), or `None` if the
+    /// log has no written entries.
+    ///
+    /// Each entry value is itself a leader_index, and the protocol
+    /// invariant guarantees these values are monotone non-decreasing
+    /// along the log — so this is also the highest leader_index this
+    /// node has ever stored, i.e. the highest vote it has ever
+    /// granted at any position. The Core uses it during leader
+    /// election to decide whether an incoming `RequestVote` outranks
+    /// every prior grant. See `DESIGN.md` §6.4.
+    pub last_leader_index: Option<u64>,
 }
 
 impl LogState {

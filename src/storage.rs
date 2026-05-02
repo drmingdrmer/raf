@@ -54,7 +54,9 @@ pub trait Storage: Send + Sync + 'static {
     ///
     /// The returned [`LogState`] carries the entries at positions in
     /// `range` (each as `Option<u64>` — `None` is a hole), the
-    /// persisted accepted index, and the total length, so the Core
-    /// can rebuild full state in a single call.
+    /// persisted accepted index, the total length, and the value of
+    /// the last non-hole entry across the entire log (the highest
+    /// leader_index this node has ever stored — see `DESIGN.md`
+    /// §6.4), so the Core can rebuild full state in a single call.
     fn read(&self, range: Range<u64>) -> impl Future<Output = io::Result<LogState>> + Send;
 }

@@ -70,7 +70,7 @@ The [`Storage`] trait exposes three operations:
 |---|---|
 | `append(from: u64, ids: &[u64])` | Write `ids` at positions `[from..from + ids.len())`, overwriting any prior values at those positions. Positions outside that range are unchanged. |
 | `accept(idx: u64)` | Persist the accepted index — the boundary above which entries are not yet confirmed identical to the leader's. Monotone non-decreasing. See §6.3. |
-| `read(range: Range<u64>)` | Read entries at positions in `range` (half-open, `start..end`). Returns a `LogState { entries: Vec<Option<u64>>, accepted_index, len }` — `None` entries are holes. |
+| `read(range: Range<u64>)` | Read entries at positions in `range` (half-open, `start..end`). Returns a `LogState { entries: Vec<Option<u64>>, accepted, len, last_leader_index }` — `None` entries are holes; `last_leader_index` is the value of the last non-hole entry across the *entire* log (see §6.4). |
 
 Two notes on `append`:
 
@@ -150,6 +150,43 @@ means the entire stored log is safe to use as-is. An invalid one
 means the speculative tail must be re-validated against the next
 leader before it can be relied on. The check is exposed in code
 as [`LogState::is_accepted_valid`].
+
+### 6.4 Last Leader Index
+
+`Storage::read` also returns the value of the last non-hole
+entry across the *entire* log — exposed in [`LogState`] as
+`last_leader_index: Option<u64>`. `None` means the log has no
+written entries.
+
+Each entry is itself a `u64` leader_index — the identity of the
+leader that proposed the entry at that position (§6.1). The
+protocol invariant is that these values are **monotone
+non-decreasing along the log**: a leader only writes its own
+identity, and a leader's identity is the position past every
+earlier leader's writes the candidate has seen. So the value of
+the last non-hole entry is also the **maximum** leader_index
+ever stored — i.e. the highest vote this node has ever granted
+at any position.
+
+This value is *not* a separately persisted field; it is derived
+from the log content at `read` time. Conceptually:
+
+```text
+last_leader_index = log
+    .iter()
+    .rev()
+    .find_map(|e| e.as_ref().copied())
+```
+
+Storage implementations are free to maintain it incrementally
+(e.g. as a cached field updated on every `append`) instead of
+scanning, but the API contract is just "the value of the last
+non-hole entry".
+
+The Core uses `last_leader_index` during leader election to
+distinguish "this `leader_index` is occupied locally" from "this
+`leader_index` is older than ones I have already granted" —
+see §8.3.
 
 ## 7. Messages / RPCs
 
