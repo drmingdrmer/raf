@@ -96,7 +96,7 @@ again until the next restart.
 Anything else — snapshots, payload retrieval, multi-range reads — is
 out of scope; the application owns it. (See §3 *Non-Goals*.)
 
-### 6.3 Accepted Index
+### 6.3 Accepted Content
 
 Alongside the log array, `Storage` persists a single `u64` — the
 **accepted index** — that splits the log into two regions:
@@ -115,6 +115,21 @@ The accepted index is monotone non-decreasing — once advanced, it
 never regresses. `accept(idx)` is the only way to move it forward,
 and `read` returns it together with the log so the Core can
 reconstruct full state on startup in a single call.
+
+#### Accepted-content cursor
+
+Together with the leader_index recorded at log position
+`accepted_index - 1`, the accepted index forms the
+**accepted-content cursor** — exposed in code as the
+[`AcceptedContent`] struct (`src/accepted_content.rs`, fields
+`leader_index` and `index`). The leader_index half is *not*
+persisted separately: it is derived from the log content at read
+time.
+
+The cursor is the freshness comparator used in leader election:
+two cursors compare lexicographically by `leader_index` first,
+then `index` — the same shape Raft uses for
+`(lastTerm, lastLogIndex)`. See §7.1 and §8.
 
 #### Validity of the persisted accepted index
 
@@ -150,19 +165,12 @@ Modeled on standard Raft's `RequestVote` RPC. Defined in code as
 | Field | Meaning |
 |---|---|
 | `leader_index` | The candidate's chosen leader identity — the next index past the end of its local log. |
-| `accepted_index` | The candidate's local accepted prefix length (see §6.3). |
-| `accepted_leader_index` | The leader_index recorded at log position `accepted_index - 1` — i.e., the leader who produced the candidate's last accepted entry. |
+| `accepted` | The candidate's last known [`AcceptedContent`] — the freshness comparator (see §6.3). |
 
 Each entry in the log is itself a `u64` leader_index (the identity
-of the leader that proposed the entry at that position). So
-`log[accepted_index - 1]` is the leader_index of the candidate's
-last accepted entry.
-
-The pair (`accepted_index`, `accepted_leader_index`) describes the
-candidate's *last known accepted content* — the position of the
-last accepted entry together with its producing leader. This is
-the freshness signal voters use to decide whether the candidate's
-log is at least as up-to-date as their own.
+of the leader that proposed the entry at that position), so
+`accepted.leader_index` is `log[accepted.index - 1]` — the
+producer of the candidate's last accepted entry.
 
 (Voter comparison rules and the response shape are TBD; see §8.)
 
@@ -479,9 +487,9 @@ workspace sub-crates.
   `read(range: Range<u64>)` — all returning `io::Result<…>`. No
   associated error type; storage failures are I/O failures.
 - `read` returns a [`LogState`] struct
-  (`{ entries, accepted_index, len }`) defined in `src/log_state.rs`,
-  so the Core picks up entries, accepted cursor, and log length in
-  one call.
+  (`{ entries, accepted, len }`) defined in `src/log_state.rs`,
+  where `accepted` is an [`AcceptedContent`] cursor — so the Core
+  picks up entries, accepted cursor, and log length in one call.
 - Methods are declared as `fn ... -> impl Future + Send` rather than
   `async fn`, so their returned futures are guaranteed `Send` and
   can be `.await`ed inside the Core's `tokio::spawn`'d task.

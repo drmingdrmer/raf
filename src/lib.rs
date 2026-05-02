@@ -5,6 +5,7 @@
 //! log-matching guarantees. See `DESIGN.md` at the repository root for
 //! the full design.
 
+mod accepted_content;
 mod core;
 mod handle;
 mod log_state;
@@ -13,6 +14,7 @@ mod raf;
 mod request_vote;
 mod storage;
 
+pub use crate::accepted_content::AcceptedContent;
 pub use crate::handle::Handle;
 pub use crate::log_state::LogState;
 pub use crate::network::InProcessNetwork;
