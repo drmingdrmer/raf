@@ -14,11 +14,21 @@ conversation. It will grow and be reorganized as the picture fills in.
 
 ## 2. Goals
 
-*To be described.*
+- **Log replication.** Implement Raft-style log replication that
+  preserves leader uniqueness and log-matching, but without the term
+  as an explicit field.
+- **State machine.** Apply committed log entries to a user-defined
+  state machine.
 
 ## 3. Non-Goals
 
-*To be described.*
+The following classical Raft features are explicitly out of scope:
+
+- **Snapshots / log compaction.**
+- **Membership configuration changes.**
+
+These may be revisited later but are deliberately deferred so the
+core protocol can be designed and validated in isolation.
 
 ## 4. Background: What the Term Does in Raft
 
@@ -274,4 +284,78 @@ Style rules carried over from openraft, on top of standard `rustfmt` /
 - Pre-PR checklist: `make lint` and `make basic_check` both pass
   locally; any documentation update is reflected in the user guide
   (`guide/`, mdBook).
+
+---
+
+## 15. Software Architecture
+
+`raf` is a **single-crate Rust library** — one Cargo package, no
+workspace sub-crates.
+
+### 15.1 Components
+
+#### 15.1.1 Core
+
+- One singleton instance per wrapped node, owned by an internal task.
+- Runs an event loop pulling events from a single mailbox.
+- An event is one of: an inbound network message, an inbound network
+  response, or an application command from a `Handle`.
+- Replies are produced inline within the same loop, mirroring
+  openraft's `RaftCore`.
+
+#### 15.1.2 Handle (Control Handle)
+
+- Cheap to clone; the application clones it freely.
+- The only API surface for the application to talk to the Core
+  (submit writes, query state, etc.).
+- Internally a thin wrapper around an `mpsc::UnboundedSender` into
+  the Core's mailbox.
+
+#### 15.1.3 Network Instance
+
+- A single instance held by the Core. **No per-replicator parallel
+  task** — the main runtime difference from openraft.
+- All outbound traffic flows through this one object.
+- Pattern: Core hands a request to Network; Network sends it; the
+  response from the peer comes back into the Core's mailbox as
+  another event. Network is essentially a one-way pipe outbound,
+  with responses fed back through the mailbox.
+
+### 15.2 Traits
+
+#### 15.2.1 `Storage`
+
+- Trait. Persistent / in-memory implementations are user-provided.
+  Surface deferred to a later step.
+
+#### 15.2.2 `Network`
+
+- Trait, so the application can plug in its own transport.
+- A default in-process implementation, `InProcessNetwork`, ships with
+  the crate, built on channels — for tests and single-process
+  benchmarks.
+
+#### 15.2.3 `StateMachine`
+
+- Trait. Receives committed log entries.
+
+### 15.3 Construction
+
+```rust
+let raft = Raft::new(storage, network, state_machine);
+let handle = raft.handle();
+```
+
+`Raft::new` spawns the Core task; the returned `Raft` exposes
+`handle()` to produce cheap-clone `Handle`s.
+
+### 15.4 Differences From openraft
+
+| Aspect | openraft | raf |
+|---|---|---|
+| Log id | `(term, node_id, log_index)` | (no term — TBD) |
+| Replication driver | per-target task running in parallel with `RaftCore` | single Network instance, all I/O via Core mailbox |
+| Network trait | per-target factory + per-target send | one singleton |
+| Snapshots | supported | out of scope |
+| Membership changes | supported | out of scope |
 

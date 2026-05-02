@@ -1,0 +1,13 @@
+[package]
+name        = "raf"
+version     = "0.0.1"
+edition     = "2024"
+description = "Raft without [T]erm — experimental consensus protocol"
+license     = "Apache-2.0"
+repository  = "https://github.com/drmingdrmer/raf"
+readme      = "README.md"
+keywords    = ["raft", "consensus", "distributed"]
+categories  = ["algorithms", "asynchronous", "data-structures"]
+
+[dependencies]
+tokio = { version = "1", features = ["rt", "rt-multi-thread", "sync", "macros"] }
