@@ -13,6 +13,7 @@ mod network;
 mod raf;
 mod request_vote;
 mod request_vote_reply;
+mod state;
 mod storage;
 
 pub use crate::accepted_content::AcceptedContent;

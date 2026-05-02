@@ -255,8 +255,50 @@ carrying:
 
 ### 8.3 Voter Decision and Response
 
-*TBD — comparison rules between candidate's and voter's last
-accepted content, and the shape of the response message.*
+A voter receiving a [`RequestVote`] (§7.1) grants the vote **if and
+only if both** conditions hold:
+
+1. **Position unclaimed.** `req.leader_index >= local.len`. The
+   candidate's claimed identity is past every position the voter has
+   ever written.
+2. **Freshness.** `req.accepted >= local.accepted`, comparing the
+   accepted-content cursor lexicographically by `leader_index`, then
+   `index` (§6.3). The candidate's last accepted content is at least
+   as up-to-date as the voter's own.
+
+Note there is no separate "higher than last granted leader_index"
+check, even though that is what the rule semantically guarantees.
+By the protocol invariant from §6.4 — every entry's value (a
+leader_index) is at most its own position — `local.last_leader_index`
+is always `< local.len`. So `req.leader_index >= local.len`
+*automatically* implies `req.leader_index > local.last_leader_index`.
+One condition does the work of two.
+
+#### On grant
+
+- **Persist first.** Call `storage.append(leader_index,
+  &[leader_index])` to durably write the position-as-identity entry
+  before updating in-memory state. If `append` fails, the durability
+  story is broken — the voter bails loudly (panics) rather than
+  silently degrading the grant.
+- **Then update in memory.** Extend the log to length
+  `leader_index + 1` (filling any intervening positions with holes),
+  set `log[leader_index] = Some(leader_index)`, and set
+  `last_leader_index = Some(leader_index)`.
+
+#### Response
+
+The reply is a [`RequestVoteReply`] (§7.1). It always carries:
+
+- `granted` — the decision.
+- `last_leader_index` — the voter's local last_leader_index (or `0`
+  if the log is empty).
+- `accepted` — the voter's local accepted-content cursor.
+
+The reply ships local state regardless of `granted`, so a rejected
+candidate can tell *which* condition fired and decide what to do
+next: a stale `accepted` means catch up before retrying; an
+under-`len` `leader_index` means skip ahead to a higher identity.
 
 ## 9. Log Replication
 
@@ -505,17 +547,30 @@ workspace sub-crates.
 - One singleton instance per wrapped node, owned by an internal task.
 - Runs an event loop pulling events from a single mailbox.
 - An event is one of: an inbound network message, an inbound network
-  response, or an application command from a `Handle`.
+  response, or an application command from a `Handle`. Inbound RPC
+  events carry a `oneshot::Sender` so the Core can reply inline; the
+  transport that received the wire-level RPC owns the receiver.
 - Replies are produced inline within the same loop, mirroring
   openraft's `RaftCore`.
+- Holds an in-memory mirror of the persistent log state — the
+  `State` struct in `src/state.rs`, with fields `log:
+  Vec<Option<u64>>`, `accepted: AcceptedContent`, and
+  `last_leader_index: Option<u64>`. Populated at startup from
+  `Storage::read` (TBD) and kept in lockstep with `Storage` on every
+  successful write.
 
 #### 15.1.2 Handle (Control Handle)
 
 - Cheap to clone; the application clones it freely.
-- The only API surface for the application to talk to the Core
-  (submit writes, query state, etc.).
+- The only API surface for the application *and* the inbound
+  transport to talk to the Core (submit writes, query state, forward
+  inbound RPCs, etc.).
 - Internally a thin wrapper around an `mpsc::UnboundedSender` into
   the Core's mailbox.
+- One method per inbound RPC, e.g. `request_vote(req) ->
+  io::Result<RequestVoteReply>` — internally creates a
+  `oneshot::channel`, ships the request to the Core with the sender,
+  and awaits the receiver for the reply.
 
 #### 15.1.3 Network Instance
 
@@ -540,9 +595,12 @@ workspace sub-crates.
   `read(range: Range<u64>)` — all returning `io::Result<…>`. No
   associated error type; storage failures are I/O failures.
 - `read` returns a [`LogState`] struct
-  (`{ entries, accepted, len }`) defined in `src/log_state.rs`,
-  where `accepted` is an [`AcceptedContent`] cursor — so the Core
-  picks up entries, accepted cursor, and log length in one call.
+  (`{ entries, accepted, len, last_leader_index }`) defined in
+  `src/log_state.rs`, where `accepted` is an [`AcceptedContent`]
+  cursor and `last_leader_index` is the value of the last non-hole
+  entry across the whole log (§6.4) — so the Core picks up entries,
+  accepted cursor, log length, and highest granted leader_index in
+  one call.
 - Methods are declared as `fn ... -> impl Future + Send` rather than
   `async fn`, so their returned futures are guaranteed `Send` and
   can be `.await`ed inside the Core's `tokio::spawn`'d task.
