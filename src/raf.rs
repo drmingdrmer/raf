@@ -1,4 +1,4 @@
-//! Top-level entry point: [`Raft`].
+//! Top-level entry point: [`Raf`].
 
 use crate::core::Core;
 use crate::handle::Handle;
@@ -10,12 +10,12 @@ use crate::storage::Storage;
 ///
 /// Owns the lifetime relationship to the internal Core task. The
 /// application interacts with the node through cheap-clone [`Handle`]s
-/// obtained via [`Raft::handle`].
-pub struct Raft {
+/// obtained via [`Raf::handle`].
+pub struct Raf {
     handle: Handle,
 }
 
-impl Raft {
+impl Raf {
     /// Start a new `raf` node.
     ///
     /// Spawns the Core task on the current Tokio runtime. Must be

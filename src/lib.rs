@@ -8,13 +8,13 @@
 mod core;
 mod handle;
 mod network;
-mod raft;
+mod raf;
 mod state_machine;
 mod storage;
 
 pub use crate::handle::Handle;
 pub use crate::network::InProcessNetwork;
 pub use crate::network::Network;
-pub use crate::raft::Raft;
+pub use crate::raf::Raf;
 pub use crate::state_machine::StateMachine;
 pub use crate::storage::Storage;

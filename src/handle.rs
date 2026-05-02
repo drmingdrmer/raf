@@ -1,4 +1,4 @@
-//! Application-side control handle for a running [`crate::Raft`] node.
+//! Application-side control handle for a running [`crate::Raf`] node.
 
 use tokio::sync::mpsc::UnboundedSender;
 

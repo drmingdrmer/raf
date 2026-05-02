@@ -342,11 +342,11 @@ workspace sub-crates.
 ### 15.3 Construction
 
 ```rust
-let raft = Raft::new(storage, network, state_machine);
-let handle = raft.handle();
+let raf = Raf::new(storage, network, state_machine);
+let handle = raf.handle();
 ```
 
-`Raft::new` spawns the Core task; the returned `Raft` exposes
+`Raf::new` spawns the Core task; the returned `Raf` exposes
 `handle()` to produce cheap-clone `Handle`s.
 
 ### 15.4 Differences From openraft
