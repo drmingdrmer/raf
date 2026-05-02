@@ -1,5 +1,7 @@
 //! Top-level entry point: [`Raf`].
 
+use std::sync::Arc;
+
 use crate::core::Core;
 use crate::handle::Handle;
 use crate::network::Network;
@@ -18,13 +20,16 @@ impl Raf {
     /// Start a new `raf` node.
     ///
     /// Spawns the Core task on the current Tokio runtime. Must be
-    /// called from within a Tokio runtime context.
+    /// called from within a Tokio runtime context. The `network` is
+    /// wrapped in [`Arc`] internally so the Core can clone it cheaply
+    /// when spawning outbound RPCs as parallel tasks
+    /// (see `DESIGN.md` §15.1.3).
     pub fn new<S, N>(storage: S, network: N) -> Self
     where
         S: Storage,
         N: Network,
     {
-        let mailbox_tx = Core::spawn(storage, network);
+        let mailbox_tx = Core::spawn(storage, Arc::new(network));
         Self {
             handle: Handle::new(mailbox_tx),
         }

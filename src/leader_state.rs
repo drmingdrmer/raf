@@ -1,0 +1,35 @@
+//! [`LeaderState`] — Core-side state held when this node is a
+//! candidate or an established leader.
+//!
+//! Followers carry no leader state (`leader: None` on Core).
+//! Candidates and established leaders carry a `LeaderState`
+//! (`leader: Some(_)`); the `established` flag distinguishes the
+//! two.
+
+use std::collections::HashSet;
+
+/// Election / leadership state.
+///
+/// Present on a node that has issued a `RequestVote` for its own
+/// candidacy and not yet stepped down. While present, the running
+/// tally of granted votes accumulates as replies arrive; once the
+/// tally reaches quorum, the leader is **established** and may
+/// serve application writes (see `DESIGN.md` §8.4 and §9).
+#[derive(Debug)]
+#[allow(dead_code)]
+pub(crate) struct LeaderState {
+    /// The candidate's chosen leader_index — its identity for this
+    /// election.
+    pub leader_index: u64,
+
+    /// Node IDs that have granted votes for `leader_index`,
+    /// including this node itself. Granting is monotone: a peer
+    /// is added on the first granted reply and never removed.
+    pub granted_votes: HashSet<u64>,
+
+    /// `true` once the granted tally has reached a quorum of the
+    /// cluster. Flips false → true once and never reverses within
+    /// the same `LeaderState` instance. Only an established leader
+    /// may serve application writes.
+    pub established: bool,
+}

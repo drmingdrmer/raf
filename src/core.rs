@@ -1,21 +1,27 @@
 //! Singleton event-loop core for a `raf` node.
 
+use std::io;
+use std::sync::Arc;
+
 use tokio::sync::mpsc::UnboundedReceiver;
 use tokio::sync::mpsc::UnboundedSender;
 use tokio::sync::mpsc::unbounded_channel;
 use tokio::sync::oneshot;
 
+use crate::leader_state::LeaderState;
 use crate::network::Network;
 use crate::request_vote::RequestVote;
 use crate::request_vote_reply::RequestVoteReply;
 use crate::storage::Storage;
+use crate::write_reply::WriteReply;
+use crate::write_request::WriteRequest;
 
 /// Internal mailbox event.
 ///
 /// Each variant is one inbound thing the Core has to react to. For
-/// inbound RPCs the variant carries a `oneshot::Sender` — the
-/// transport that received the wire-level RPC owns the receiver and
-/// forwards the reply back to the calling peer.
+/// inbound RPCs and application requests the variant carries a
+/// `oneshot::Sender` — the caller (transport or application) owns
+/// the receiver and awaits the reply.
 pub(crate) enum Event {
     /// Inbound `RequestVote` from a peer; the Core decides the vote
     /// per `DESIGN.md` §8.3 and ships the reply back through
@@ -23,6 +29,14 @@ pub(crate) enum Event {
     RequestVote {
         req: RequestVote,
         reply_tx: oneshot::Sender<RequestVoteReply>,
+    },
+    /// Application write request submitted via
+    /// [`crate::Handle::write`] — handled per `DESIGN.md` §9.
+    /// Only an established leader produces an `Ok` reply; everyone
+    /// else returns an `io::Error`.
+    Write {
+        req: WriteRequest,
+        reply_tx: oneshot::Sender<io::Result<WriteReply>>,
     },
 }
 
@@ -32,8 +46,14 @@ where
     N: Network,
 {
     storage: S,
+    /// Held in `Arc` so outbound RPCs can be cloned into spawned
+    /// tasks (see `DESIGN.md` §15.1.3).
     #[allow(dead_code)]
-    network: N,
+    network: Arc<N>,
+    /// Election / leadership state. `None` on followers; `Some`
+    /// while a candidate or established leader. See
+    /// [`LeaderState`] and `DESIGN.md` §8.4.
+    leader: Option<LeaderState>,
     mailbox: UnboundedReceiver<Event>,
 }
 
@@ -44,11 +64,12 @@ where
 {
     /// Spawn the Core onto the current Tokio runtime; return a sender
     /// to its mailbox.
-    pub(crate) fn spawn(storage: S, network: N) -> UnboundedSender<Event> {
+    pub(crate) fn spawn(storage: S, network: Arc<N>) -> UnboundedSender<Event> {
         let (tx, rx) = unbounded_channel();
         let core = Self {
             storage,
             network,
+            leader: None,
             mailbox: rx,
         };
         tokio::spawn(core.run());
@@ -64,6 +85,9 @@ where
                 Event::RequestVote { req, reply_tx } => {
                     self.handle_request_vote(req, reply_tx).await;
                 }
+                Event::Write { req, reply_tx } => {
+                    self.handle_write(req, reply_tx).await;
+                }
             }
         }
     }
@@ -71,8 +95,9 @@ where
     /// Decide an inbound `RequestVote` per `DESIGN.md` §8.3.
     ///
     /// Reads current state from `Storage` on every call. The Core
-    /// keeps no in-memory mirror — `Storage` is the single source of
-    /// truth (see `DESIGN.md` §15.1.4 and §15.1.1).
+    /// keeps no in-memory mirror of log state — `Storage` is the
+    /// single source of truth (see `DESIGN.md` §15.1.4 and
+    /// §15.1.1).
     ///
     /// Grant iff both:
     /// 1. `req.leader_index >= log.len` — the candidate's claimed identity is past every position
@@ -112,5 +137,37 @@ where
             last_leader_index,
             accepted: log.accepted,
         });
+    }
+
+    /// Handle an application write request per `DESIGN.md` §9.
+    ///
+    /// Only an *established* leader serves writes. A node is an
+    /// established leader iff it holds a [`LeaderState`] **and**
+    /// that state's `established` flag is set. Anything else
+    /// (follower, or candidate still gathering votes) returns an
+    /// `io::Error` — the application interprets that as "talk to a
+    /// different node".
+    async fn handle_write(&mut self, req: WriteRequest, reply_tx: oneshot::Sender<io::Result<WriteReply>>) {
+        let is_established_leader = self.leader.as_ref().is_some_and(|state| state.established);
+
+        if !is_established_leader {
+            let _ = reply_tx.send(Err(io::Error::other("not a leader; cannot handle write requests")));
+            return;
+        }
+
+        self.dispatch_leader_write(req, reply_tx).await;
+    }
+
+    /// Leader-side write handling — placeholder.
+    ///
+    /// TODO: implement leader-side write replication.
+    /// Will (1) append the request locally at `log.len`, (2)
+    /// replicate the new entry to peers, (3) advance the accepted
+    /// index once a quorum has acked, and (4) reply with the
+    /// committed index.
+    async fn dispatch_leader_write(&mut self, _req: WriteRequest, reply_tx: oneshot::Sender<io::Result<WriteReply>>) {
+        let _ = reply_tx.send(Err(io::Error::other(
+            "leader-side write replication not yet implemented",
+        )));
     }
 }

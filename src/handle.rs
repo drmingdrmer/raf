@@ -8,6 +8,8 @@ use tokio::sync::oneshot;
 use crate::core::Event;
 use crate::request_vote::RequestVote;
 use crate::request_vote_reply::RequestVoteReply;
+use crate::write_reply::WriteReply;
+use crate::write_request::WriteRequest;
 
 /// Cheap-clone control handle to a running `raf` node.
 ///
@@ -46,5 +48,23 @@ impl Handle {
             .send(Event::RequestVote { req, reply_tx })
             .map_err(|_| io::Error::other("Core mailbox closed"))?;
         reply_rx.await.map_err(|_| io::Error::other("Core dropped RequestVote reply channel"))
+    }
+
+    /// Submit an application write to the leader and await commit.
+    ///
+    /// Only an established leader produces an `Ok` reply (with the
+    /// committed log position). On any other node — follower or
+    /// still-electing candidate — the inner reply is an `io::Error`,
+    /// which the application interprets as "this node is not the
+    /// leader; talk to someone else." See `DESIGN.md` §9.
+    ///
+    /// The outer `io::Error` covers Core-shutdown cases (mailbox
+    /// closed, reply channel dropped).
+    pub async fn write(&self, req: WriteRequest) -> io::Result<WriteReply> {
+        let (reply_tx, reply_rx) = oneshot::channel();
+        self.mailbox_tx
+            .send(Event::Write { req, reply_tx })
+            .map_err(|_| io::Error::other("Core mailbox closed"))?;
+        reply_rx.await.map_err(|_| io::Error::other("Core dropped Write reply channel"))?
     }
 }

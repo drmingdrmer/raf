@@ -274,9 +274,66 @@ candidate can tell *which* condition fired and decide what to do
 next: a stale `accepted` means catch up before retrying; an
 under-`len` `leader_index` means skip ahead to a higher identity.
 
+### 8.4 Tallying Votes and Establishing Leadership
+
+A node that has issued a `RequestVote` for its own candidacy holds
+**leader state** in memory until it either becomes an established
+leader, steps down, or restarts. Followers carry no leader state.
+
+Leader state holds three things:
+
+- The candidate's chosen `leader_index` — its identity for this
+  election.
+- The running set of granted votes — the node IDs (including this
+  node itself) that have granted votes for `leader_index`.
+- An `established` flag.
+
+The candidate counts its own vote in the initial tally. By §8.3
+the candidate trivially satisfies the grant rules for itself: its
+`leader_index` equals its own `len`, and its `accepted` cursor is
+its own current value.
+
+The candidate becomes an **established leader** when the granted
+set reaches a quorum of the cluster. Establishment flips the flag
+once and never reverses within the same leader state.
+
+Leader state is *transient* (in-memory only — see §15.1.1) and
+distinct from the persistent log state owned by `Storage`. The
+in-memory exception is deliberate: election outcomes don't need
+to survive a crash — a restarted node simply re-runs the
+election.
+
+Only an established leader may serve application writes (§9). A
+candidate still gathering votes refuses writes; so does any
+follower.
+
 ## 9. Log Replication
 
-*To be described.*
+### 9.1 Write API
+
+The application submits writes to a node via the control handle.
+On the leader, the call returns when the entry has been committed
+by quorum and carries the committed log position. On any other
+node — follower, or candidate still gathering votes — the call
+returns an error indicating that this node is not the leader.
+
+The application interprets that error as a leader-redirect signal
+and retries against another node. `raf` does not currently route
+writes internally on the application's behalf; that is application
+responsibility.
+
+A node admits a write iff:
+
+1. It holds leader state (§8.4), **and**
+2. That leader state's `established` flag is set.
+
+Both conditions are required. A candidate still tallying votes is
+*not yet* a leader for write purposes; it must wait for quorum
+before accepting writes.
+
+### 9.2 Leader-Side Replication
+
+*TBD — how the leader appends, replicates, and commits.*
 
 ## 10. Safety Argument
 
@@ -527,25 +584,36 @@ workspace sub-crates.
   calling peer.
 - Replies are produced inline within the same loop, mirroring
   openraft's `RaftCore`.
-- **Stateless apart from the mailbox.** The Core keeps no in-memory
-  protocol state — every handler reads what it needs from `Storage`
-  on demand (see §6.2). Trades performance for simplicity; an
-  experimental-scope choice.
+- **No in-memory mirror of log state.** Every handler reads `len`,
+  the accepted cursor, the last leader index, and any entries from
+  `Storage` on demand (see §6.2). Trades performance for
+  simplicity; an experimental-scope choice.
+- **Holds in-memory leader state** when the node is a candidate or
+  established leader (§8.4): the candidate `leader_index`, the
+  running tally of granted votes, and the `established` flag.
+  Leader state is transient by design — it does not need to survive
+  restart.
 
 #### 15.1.2 Handle (Control Handle)
 
 - Cheap to clone; the application clones it freely.
 - The only API surface for the application *and* the inbound
-  transport to talk to the Core (submit writes, query state, forward
-  inbound RPCs, etc.).
+  transport to talk to the Core. The application submits writes
+  through it (§9.1); the inbound transport forwards peer RPCs
+  through it.
 - Internally a thin wrapper that fans application/transport calls
   into the Core's mailbox and awaits the inline reply.
 
 #### 15.1.3 Network
 
-- A single instance held by the Core. **No per-replicator parallel
-  task** — the main runtime difference from openraft.
-- All outbound traffic flows through this one object.
+- A single instance held by the Core, behind a cheap-clone shared
+  handle. **No per-replicator parallel task** — the main runtime
+  difference from openraft.
+- All outbound traffic flows through this one object. The Core may
+  clone the handle into a spawned subtask when it wants an outbound
+  RPC to run in parallel with the event loop (e.g. fan-out
+  `RequestVote` to all peers); the cheap clone is what makes that
+  pattern free.
 - Pattern: the Core sends an outbound RPC and receives the reply
   directly from the same call. Outbound replies do **not** loop
   back through the Core's mailbox. **Inbound RPCs *from* peers do
