@@ -5,7 +5,6 @@ use tokio::sync::mpsc::UnboundedSender;
 use tokio::sync::mpsc::unbounded_channel;
 
 use crate::network::Network;
-use crate::state_machine::StateMachine;
 use crate::storage::Storage;
 
 /// Internal mailbox event.
@@ -19,32 +18,28 @@ pub(crate) enum Event {
 }
 
 #[allow(dead_code)]
-pub(crate) struct Core<S, N, M>
+pub(crate) struct Core<S, N>
 where
     S: Storage,
     N: Network,
-    M: StateMachine,
 {
     storage: S,
     network: N,
-    state_machine: M,
     mailbox: UnboundedReceiver<Event>,
 }
 
-impl<S, N, M> Core<S, N, M>
+impl<S, N> Core<S, N>
 where
     S: Storage,
     N: Network,
-    M: StateMachine,
 {
     /// Spawn the Core onto the current Tokio runtime; return a sender
     /// to its mailbox.
-    pub(crate) fn spawn(storage: S, network: N, state_machine: M) -> UnboundedSender<Event> {
+    pub(crate) fn spawn(storage: S, network: N) -> UnboundedSender<Event> {
         let (tx, rx) = unbounded_channel();
         let core = Self {
             storage,
             network,
-            state_machine,
             mailbox: rx,
         };
         tokio::spawn(core.run());

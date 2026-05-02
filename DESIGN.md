@@ -16,9 +16,9 @@ conversation. It will grow and be reorganized as the picture fills in.
 
 - **Log replication.** Implement Raft-style log replication that
   preserves leader uniqueness and log-matching, but without the term
-  as an explicit field.
-- **State machine.** Apply committed log entries to a user-defined
-  state machine.
+  as an explicit field. Output: a durably ordered, committed sequence
+  of `u64` log identities. The application owns payload storage and
+  payload application; no state machine is part of `raf` (see §6).
 
 ## 3. Non-Goals
 
@@ -42,7 +42,44 @@ the same properties.*
 
 ## 6. State
 
-*To be described — per-node state, persistent vs. volatile.*
+### 6.1 Log Model — Identity Without Payload
+
+`raf` does **not** store log payloads. The log is a sequence of
+opaque 64-bit identifiers — the *log identity*. The application maps
+each identifier to whatever payload it represents and persists that
+mapping in its own storage.
+
+Conceptually:
+
+```text
+log: Vec<u64>
+```
+
+Rationale: the job of a consensus algorithm is to make a *sequence
+of identities* durable and agreed-upon. Once identity persistence
+is guaranteed, payload storage can be delegated to any external
+system (database, object store, append-only file) without involving
+the consensus core. Decoupling identity from payload is the central
+simplification here — alongside dropping the term.
+
+### 6.2 Storage Surface
+
+The [`Storage`] trait exposes three operations on the log:
+
+| Method | Semantics |
+|---|---|
+| `append(ids: &[u64])` | Append a sequence of identifiers to the end of the log. |
+| `truncate(from: u64)` | Remove all entries at position `from` (0-based) and beyond. |
+| `read(range: Range<u64>)` | Read identifiers at positions in `range` (half-open, `start..end`). Returns `(entries, len)` where `len` is the total number of entries currently in the log — lets the Core size its in-memory log without a second call. |
+
+`append` and `truncate` are on the steady-state hot path. `read` is
+used **only** by the Core at startup to rebuild its in-memory log
+from persistent storage; the running Core serves replication out of
+its in-memory copy and never reads from `Storage` again until the
+next restart.
+
+Anything else — snapshots, payload retrieval, multi-range reads — is
+out of scope; the application owns it. (See §3 *Non-Goals*.)
 
 ## 7. Messages / RPCs
 
@@ -325,8 +362,15 @@ workspace sub-crates.
 
 #### 15.2.1 `Storage`
 
-- Trait. Persistent / in-memory implementations are user-provided.
-  Surface deferred to a later step.
+- Trait, defined in `src/storage.rs`. Three methods —
+  `append(ids: &[u64])`, `truncate(from: u64)`, and
+  `read(range: Range<u64>)` — all returning `io::Result<…>`. No
+  associated error type; storage failures are I/O failures.
+- Methods are declared as `fn ... -> impl Future + Send` rather than
+  `async fn`, so their returned futures are guaranteed `Send` and
+  can be `.await`ed inside the Core's `tokio::spawn`'d task.
+- See §6 for the log-model rationale and §6.2 for the read-only-at-
+  startup contract.
 
 #### 15.2.2 `Network`
 
@@ -335,14 +379,10 @@ workspace sub-crates.
   the crate, built on channels — for tests and single-process
   benchmarks.
 
-#### 15.2.3 `StateMachine`
-
-- Trait. Receives committed log entries.
-
 ### 15.3 Construction
 
 ```rust
-let raf = Raf::new(storage, network, state_machine);
+let raf = Raf::new(storage, network);
 let handle = raf.handle();
 ```
 
@@ -358,4 +398,5 @@ let handle = raf.handle();
 | Network trait | per-target factory + per-target send | one singleton |
 | Snapshots | supported | out of scope |
 | Membership changes | supported | out of scope |
+| State machine | required (`RaftStateMachine` trait) | not part of `raf`; application owns log application |
 

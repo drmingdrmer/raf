@@ -3,7 +3,6 @@
 use crate::core::Core;
 use crate::handle::Handle;
 use crate::network::Network;
-use crate::state_machine::StateMachine;
 use crate::storage::Storage;
 
 /// A running `raf` node.
@@ -20,13 +19,12 @@ impl Raf {
     ///
     /// Spawns the Core task on the current Tokio runtime. Must be
     /// called from within a Tokio runtime context.
-    pub fn new<S, N, M>(storage: S, network: N, state_machine: M) -> Self
+    pub fn new<S, N>(storage: S, network: N) -> Self
     where
         S: Storage,
         N: Network,
-        M: StateMachine,
     {
-        let mailbox_tx = Core::spawn(storage, network, state_machine);
+        let mailbox_tx = Core::spawn(storage, network);
         Self {
             handle: Handle::new(mailbox_tx),
         }
