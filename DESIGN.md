@@ -303,6 +303,31 @@ in-memory exception is deliberate: election outcomes don't need
 to survive a crash — a restarted node simply re-runs the
 election.
 
+#### Establishment is unique per `leader_index`
+
+At most one candidate can ever become the established leader for
+any given `leader_index`. The argument falls out of §8.3 directly,
+without needing a separate tie-breaker:
+
+- A successful grant of `RequestVote(leader_index = L)` calls
+  `append(L, &[L])`, which advances the voter's `len` to `L + 1`.
+- Any subsequent `RequestVote(leader_index = L)` from any
+  candidate then fails rule 1 (`L < L + 1 = local.len`) and is
+  rejected.
+- So at any fixed `leader_index = L`, each voter grants **at most
+  one** candidate. The grant sets across competing candidates are
+  disjoint by construction.
+- Two candidates at the same `leader_index` would each need a
+  quorum-sized grant set. Disjoint grant sets together exceed the
+  cluster size only if their sum exceeds `N` — impossible, since
+  no voter is counted twice.
+
+This is the leader-uniqueness piece of the safety argument
+(see §10). Standard Raft uses the term as the discriminator that
+guarantees uniqueness across simultaneous candidacies; in `raf`,
+the position-as-identity rule does the same work — once a
+position is filled, that election is over.
+
 Only an established leader may serve application writes (§9). A
 candidate still gathering votes refuses writes; so does any
 follower.
