@@ -64,30 +64,142 @@ simplification here — alongside dropping the term.
 
 ### 6.2 Storage Surface
 
-The [`Storage`] trait exposes three operations on the log:
+The [`Storage`] trait exposes three operations:
 
 | Method | Semantics |
 |---|---|
-| `append(ids: &[u64])` | Append a sequence of identifiers to the end of the log. |
-| `truncate(from: u64)` | Remove all entries at position `from` (0-based) and beyond. |
-| `read(range: Range<u64>)` | Read identifiers at positions in `range` (half-open, `start..end`). Returns `(entries, len)` where `len` is the total number of entries currently in the log — lets the Core size its in-memory log without a second call. |
+| `append(from: u64, ids: &[u64])` | Write `ids` at positions `[from..from + ids.len())`, overwriting any prior values at those positions. Positions outside that range are unchanged. |
+| `accept(idx: u64)` | Persist the accepted index — the boundary above which entries are not yet confirmed identical to the leader's. Monotone non-decreasing. See §6.3. |
+| `read(range: Range<u64>)` | Read entries at positions in `range` (half-open, `start..end`). Returns a `LogState { entries: Vec<Option<u64>>, accepted_index, len }` — `None` entries are holes. |
 
-`append` and `truncate` are on the steady-state hot path. `read` is
-used **only** by the Core at startup to rebuild its in-memory log
-from persistent storage; the running Core serves replication out of
-its in-memory copy and never reads from `Storage` again until the
-next restart.
+Two notes on `append`:
+
+**Append does not truncate.** Writing at a position never removes
+entries at later positions. If old entries persist beyond
+`from + ids.len()` after an `append`, they remain in the
+speculative tail. The protocol relies on `accepted_index` (§6.3),
+not on truncation, to demarcate trusted state.
+
+**Holes are allowed.** `from` may exceed the highest
+previously-written position; the intervening positions become
+**holes** — empty slots that a later `append` may fill in. `read`
+returns `None` at hole positions and `Some(id)` at written
+positions. `len` is the highest written position plus one (or
+zero if nothing has been written).
+
+`append` and `accept` are on the steady-state hot path.
+`read` is used **only** by the Core at startup to rebuild its
+in-memory state from persistent storage; the running Core serves
+replication out of its in-memory copy and never reads from `Storage`
+again until the next restart.
 
 Anything else — snapshots, payload retrieval, multi-range reads — is
 out of scope; the application owns it. (See §3 *Non-Goals*.)
 
+### 6.3 Accepted Index
+
+Alongside the log array, `Storage` persists a single `u64` — the
+**accepted index** — that splits the log into two regions:
+
+- Positions `< accepted_index` are **decided**: entries here are
+  confirmed byte-for-byte identical to the leader's log and will
+  not be overwritten under normal protocol operation. The
+  protocol must also never advance `accepted_index` past a hole,
+  so a valid prefix is always contiguous and fully populated.
+- Positions `>= accepted_index` are **speculative**: entries here
+  have been written but not yet matched against the leader, so
+  they may still be overwritten by a later `append(from, ids)` if
+  a divergent prefix is detected.
+
+The accepted index is monotone non-decreasing — once advanced, it
+never regresses. `accept(idx)` is the only way to move it forward,
+and `read` returns it together with the log so the Core can
+reconstruct full state on startup in a single call.
+
+#### Validity of the persisted accepted index
+
+The persisted `accepted_index` is **valid** — i.e., describes the
+storage as-is — only when `accepted_index >= len`. Equivalently:
+when there is no speculative tail.
+
+- `accepted_index < len`: storage holds a speculative tail left
+  behind by a previous leader. The persisted accepted_index
+  describes a real prior state, but the trailing entries
+  (positions `[accepted_index..len)`) have not yet been confirmed
+  by the current leader.
+- `accepted_index >= len`: every stored entry has been accepted
+  by the current leader; the value is current and authoritative.
+
+The Core consults this rule at startup. A valid accepted_index
+means the entire stored log is safe to use as-is. An invalid one
+means the speculative tail must be re-validated against the next
+leader before it can be relied on. The check is exposed in code
+as [`LogState::is_accepted_valid`].
+
 ## 7. Messages / RPCs
 
-*To be described.*
+`raf`'s wire protocol is — for now — a single RPC pair, with more to
+come as the design fills in.
+
+### 7.1 RequestVote
+
+Sent by a candidate to other nodes when it tries to become leader.
+Modeled on standard Raft's `RequestVote` RPC. Defined in code as
+[`RequestVote`] in `src/request_vote.rs`.
+
+| Field | Meaning |
+|---|---|
+| `leader_index` | The candidate's chosen leader identity — the next index past the end of its local log. |
+| `accepted_index` | The candidate's local accepted prefix length (see §6.3). |
+| `accepted_leader_index` | The leader_index recorded at log position `accepted_index - 1` — i.e., the leader who produced the candidate's last accepted entry. |
+
+Each entry in the log is itself a `u64` leader_index (the identity
+of the leader that proposed the entry at that position). So
+`log[accepted_index - 1]` is the leader_index of the candidate's
+last accepted entry.
+
+The pair (`accepted_index`, `accepted_leader_index`) describes the
+candidate's *last known accepted content* — the position of the
+last accepted entry together with its producing leader. This is
+the freshness signal voters use to decide whether the candidate's
+log is at least as up-to-date as their own.
+
+(Voter comparison rules and the response shape are TBD; see §8.)
 
 ## 8. Leader Election
 
-*To be described.*
+A node decides to become a candidate when it observes that no
+current leader is making progress (mechanism — timeout, heartbeat
+starvation, etc. — TBD).
+
+### 8.1 Choosing an Identity
+
+A candidate's identity is `len`, the next index past the end of its
+local log. This index is what the candidate is "running for": if
+elected, it will write its first entry as leader at this position.
+Naming the identity by the position it claims removes the need for
+a separate term — the position itself orders leaders.
+
+Each subsequent entry the leader proposes (at positions `len`,
+`len+1`, …) carries this same `leader_index` as its log value.
+Entries at positions below `leader_index` are inherited from
+previous leaders and remain unchanged unless they need to be
+overwritten because they diverge from a more-up-to-date log
+(§6.2).
+
+### 8.2 Issuing the Vote Request
+
+The candidate sends a [`RequestVote`] (§7.1) to each other node,
+carrying:
+
+- its candidate identity (`leader_index = len`);
+- its last accepted content
+  (`accepted_index`, `accepted_leader_index`).
+
+### 8.3 Voter Decision and Response
+
+*TBD — comparison rules between candidate's and voter's last
+accepted content, and the shape of the response message.*
 
 ## 9. Log Replication
 
@@ -363,14 +475,18 @@ workspace sub-crates.
 #### 15.2.1 `Storage`
 
 - Trait, defined in `src/storage.rs`. Three methods —
-  `append(ids: &[u64])`, `truncate(from: u64)`, and
+  `append(from: u64, ids: &[u64])`, `accept(idx: u64)`, and
   `read(range: Range<u64>)` — all returning `io::Result<…>`. No
   associated error type; storage failures are I/O failures.
+- `read` returns a [`LogState`] struct
+  (`{ entries, accepted_index, len }`) defined in `src/log_state.rs`,
+  so the Core picks up entries, accepted cursor, and log length in
+  one call.
 - Methods are declared as `fn ... -> impl Future + Send` rather than
   `async fn`, so their returned futures are guaranteed `Send` and
   can be `.await`ed inside the Core's `tokio::spawn`'d task.
-- See §6 for the log-model rationale and §6.2 for the read-only-at-
-  startup contract.
+- See §6 for the log-model rationale, §6.2 for the storage surface,
+  and §6.3 for accepted-index semantics.
 
 #### 15.2.2 `Network`
 

@@ -7,12 +7,16 @@
 
 mod core;
 mod handle;
+mod log_state;
 mod network;
 mod raf;
+mod request_vote;
 mod storage;
 
 pub use crate::handle::Handle;
+pub use crate::log_state::LogState;
 pub use crate::network::InProcessNetwork;
 pub use crate::network::Network;
 pub use crate::raf::Raf;
+pub use crate::request_vote::RequestVote;
 pub use crate::storage::Storage;
