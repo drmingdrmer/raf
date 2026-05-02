@@ -64,129 +64,102 @@ simplification here — alongside dropping the term.
 
 ### 6.2 Storage Surface
 
-The [`Storage`] trait exposes three operations:
+Storage owns two persistent values: the log itself, and the
+accepted-index cursor (§6.3). At a protocol level it supports three
+operations:
 
-| Method | Semantics |
-|---|---|
-| `append(from: u64, ids: &[u64])` | Write `ids` at positions `[from..from + ids.len())`, overwriting any prior values at those positions. Positions outside that range are unchanged. |
-| `accept(idx: u64)` | Persist the accepted index — the boundary above which entries are not yet confirmed identical to the leader's. Monotone non-decreasing. See §6.3. |
-| `read(range: Range<u64>)` | Read entries at positions in `range` (half-open, `start..end`). Returns a `LogState { entries: Vec<Option<u64>>, accepted, len, last_leader_index }` — `None` entries are holes; `last_leader_index` is the value of the last non-hole entry across the *entire* log (see §6.4). |
+- **Write entries at a position.** A write at position `p`
+  overwrites whatever was at `p` before. Positions outside the
+  write range are untouched.
+- **Advance the accepted index.** Monotone non-decreasing — once
+  advanced, the cursor never regresses (§6.3).
+- **Read state at startup.** The running Core serves replication
+  out of an in-memory mirror; storage is consulted only when the
+  Core boots, to rebuild that mirror.
 
-Two notes on `append`:
+Two protocol-level properties matter:
 
-**Append does not truncate.** Writing at a position never removes
-entries at later positions. If old entries persist beyond
-`from + ids.len()` after an `append`, they remain in the
-speculative tail. The protocol relies on `accepted_index` (§6.3),
-not on truncation, to demarcate trusted state.
+**Writes do not truncate.** Writing at a position never removes
+entries at later positions. If old entries persist beyond the write
+boundary, they remain in the speculative tail. The protocol relies
+on the accepted-index cursor (§6.3), not on truncation, to
+demarcate trusted state.
 
-**Holes are allowed.** `from` may exceed the highest
-previously-written position; the intervening positions become
-**holes** — empty slots that a later `append` may fill in. `read`
-returns `None` at hole positions and `Some(id)` at written
-positions. `len` is the highest written position plus one (or
-zero if nothing has been written).
-
-`append` and `accept` are on the steady-state hot path.
-`read` is used **only** by the Core at startup to rebuild its
-in-memory state from persistent storage; the running Core serves
-replication out of its in-memory copy and never reads from `Storage`
-again until the next restart.
+**Holes are allowed.** A write may start at a position past the
+highest previously-written one; the intervening positions become
+**holes** — empty slots that a later write may fill in.
 
 Anything else — snapshots, payload retrieval, multi-range reads — is
 out of scope; the application owns it. (See §3 *Non-Goals*.)
 
 ### 6.3 Accepted Content
 
-Alongside the log array, `Storage` persists a single `u64` — the
+Alongside the log, storage persists a single integer — the
 **accepted index** — that splits the log into two regions:
 
 - Positions `< accepted_index` are **decided**: entries here are
   confirmed byte-for-byte identical to the leader's log and will
-  not be overwritten under normal protocol operation. The
-  protocol must also never advance `accepted_index` past a hole,
-  so a valid prefix is always contiguous and fully populated.
+  not be overwritten under normal protocol operation. The protocol
+  never advances the accepted index past a hole, so a valid prefix
+  is always contiguous and fully populated.
 - Positions `>= accepted_index` are **speculative**: entries here
   have been written but not yet matched against the leader, so
-  they may still be overwritten by a later `append(from, ids)` if
-  a divergent prefix is detected.
+  they may still be overwritten if a divergent prefix is detected.
 
 The accepted index is monotone non-decreasing — once advanced, it
-never regresses. `accept(idx)` is the only way to move it forward,
-and `read` returns it together with the log so the Core can
-reconstruct full state on startup in a single call.
+never regresses.
 
 #### Accepted-content cursor
 
 Together with the leader_index recorded at log position
 `accepted_index - 1`, the accepted index forms the
-**accepted-content cursor** — exposed in code as the
-[`AcceptedContent`] struct (`src/accepted_content.rs`, fields
-`leader_index` and `index`). The leader_index half is *not*
-persisted separately: it is derived from the log content at read
-time.
+**accepted-content cursor** — the pair `(leader_index, index)`. The
+leader_index half is *not* persisted separately: it is derived from
+log content at startup.
 
-The cursor is the freshness comparator used in leader election:
-two cursors compare lexicographically by `leader_index` first,
-then `index` — the same shape Raft uses for
-`(lastTerm, lastLogIndex)`. See §7.1 and §8.
+The cursor is the freshness comparator used in leader election: two
+cursors compare lexicographically by leader_index first, then index
+— the same shape Raft uses for `(lastTerm, lastLogIndex)`. See §7.1
+and §8.
 
 #### Validity of the persisted accepted index
 
-The persisted `accepted_index` is **valid** — i.e., describes the
+The persisted accepted index is **valid** — i.e., describes the
 storage as-is — only when `accepted_index >= len`. Equivalently:
 when there is no speculative tail.
 
 - `accepted_index < len`: storage holds a speculative tail left
-  behind by a previous leader. The persisted accepted_index
+  behind by a previous leader. The persisted accepted index
   describes a real prior state, but the trailing entries
   (positions `[accepted_index..len)`) have not yet been confirmed
   by the current leader.
-- `accepted_index >= len`: every stored entry has been accepted
-  by the current leader; the value is current and authoritative.
+- `accepted_index >= len`: every stored entry has been accepted by
+  the current leader; the value is current and authoritative.
 
-The Core consults this rule at startup. A valid accepted_index
+The Core consults this rule at startup. A valid accepted index
 means the entire stored log is safe to use as-is. An invalid one
 means the speculative tail must be re-validated against the next
-leader before it can be relied on. The check is exposed in code
-as [`LogState::is_accepted_valid`].
+leader before it can be relied on.
 
 ### 6.4 Last Leader Index
 
-`Storage::read` also returns the value of the last non-hole
-entry across the *entire* log — exposed in [`LogState`] as
-`last_leader_index: Option<u64>`. `None` means the log has no
-written entries.
+A node's **last leader index** is the value of the last non-hole
+entry in its log, or absent if the log has no written entries.
 
-Each entry is itself a `u64` leader_index — the identity of the
-leader that proposed the entry at that position (§6.1). The
-protocol invariant is that these values are **monotone
-non-decreasing along the log**: a leader only writes its own
-identity, and a leader's identity is the position past every
-earlier leader's writes the candidate has seen. So the value of
-the last non-hole entry is also the **maximum** leader_index
-ever stored — i.e. the highest vote this node has ever granted
-at any position.
+Each entry is itself a leader_index — the identity of the leader
+that proposed the entry at that position (§6.1). The protocol
+invariant is that these values are **monotone non-decreasing along
+the log**: a leader only writes its own identity, and a leader's
+identity is the position past every earlier leader's writes the
+candidate has seen. So the value of the last non-hole entry is also
+the **maximum** leader_index ever stored — i.e. the highest vote
+this node has ever granted at any position.
 
-This value is *not* a separately persisted field; it is derived
-from the log content at `read` time. Conceptually:
-
-```text
-last_leader_index = log
-    .iter()
-    .rev()
-    .find_map(|e| e.as_ref().copied())
-```
-
-Storage implementations are free to maintain it incrementally
-(e.g. as a cached field updated on every `append`) instead of
-scanning, but the API contract is just "the value of the last
-non-hole entry".
-
-The Core uses `last_leader_index` during leader election to
-distinguish "this `leader_index` is occupied locally" from "this
-`leader_index` is older than ones I have already granted" —
-see §8.3.
+This value is not separately persisted; it is derived from log
+content. The Core uses it during leader election to interpret
+rejections (§8.3): a candidate whose `leader_index` is below the
+voter's last leader index is stale, regardless of whether its
+specific position is occupied.
 
 ## 7. Messages / RPCs
 
@@ -196,32 +169,30 @@ come as the design fills in.
 ### 7.1 RequestVote
 
 Sent by a candidate to other nodes when it tries to become leader.
-Modeled on standard Raft's `RequestVote` RPC. Defined in code as
-[`RequestVote`] in `src/request_vote.rs`.
+Modeled on standard Raft's `RequestVote` RPC.
 
 | Field | Meaning |
 |---|---|
 | `leader_index` | The candidate's chosen leader identity — the next index past the end of its local log. |
-| `accepted` | The candidate's last known [`AcceptedContent`] — the freshness comparator (see §6.3). |
+| `accepted` | The candidate's last known accepted-content cursor — the freshness comparator (see §6.3). |
 
-Each entry in the log is itself a `u64` leader_index (the identity
-of the leader that proposed the entry at that position), so
-`accepted.leader_index` is `log[accepted.index - 1]` — the
-producer of the candidate's last accepted entry.
+Each entry in the log is itself a leader_index (the identity of the
+leader that proposed the entry at that position), so
+`accepted.leader_index` is `log[accepted.index - 1]` — the producer
+of the candidate's last accepted entry.
 
-**Reply** — defined in code as [`RequestVoteReply`] in
-`src/request_vote_reply.rs`:
+**Reply:**
 
 | Field | Meaning |
 |---|---|
 | `granted` | Whether the responder accepted the candidate's claim. |
 | `last_leader_index` | The responder's most-recently-seen leader_index. |
-| `accepted` | The responder's local [`AcceptedContent`]. |
+| `accepted` | The responder's local accepted-content cursor. |
 
-The reply always carries the responder's local state, so when
-`granted == false` the candidate can determine which condition
-caused the rejection — an occupied `leader_index`, or a stale
-`accepted` cursor (per §8.3).
+The reply always carries the responder's local state, so when the
+vote is rejected the candidate can determine which condition caused
+the rejection — an occupied `leader_index`, or a stale `accepted`
+cursor (per §8.3).
 
 ## 8. Leader Election
 
@@ -548,16 +519,14 @@ workspace sub-crates.
 - Runs an event loop pulling events from a single mailbox.
 - An event is one of: an inbound network message, an inbound network
   response, or an application command from a `Handle`. Inbound RPC
-  events carry a `oneshot::Sender` so the Core can reply inline; the
-  transport that received the wire-level RPC owns the receiver.
+  events carry the means to reply inline so the transport that
+  received the wire-level RPC can forward the response back to the
+  calling peer.
 - Replies are produced inline within the same loop, mirroring
   openraft's `RaftCore`.
-- Holds an in-memory mirror of the persistent log state — the
-  `State` struct in `src/state.rs`, with fields `log:
-  Vec<Option<u64>>`, `accepted: AcceptedContent`, and
-  `last_leader_index: Option<u64>`. Populated at startup from
-  `Storage::read` (TBD) and kept in lockstep with `Storage` on every
-  successful write.
+- Holds an in-memory mirror of the persistent log state — populated
+  at startup from `Storage` and kept in lockstep with `Storage` on
+  every successful write.
 
 #### 15.1.2 Handle (Control Handle)
 
@@ -565,58 +534,32 @@ workspace sub-crates.
 - The only API surface for the application *and* the inbound
   transport to talk to the Core (submit writes, query state, forward
   inbound RPCs, etc.).
-- Internally a thin wrapper around an `mpsc::UnboundedSender` into
-  the Core's mailbox.
-- One method per inbound RPC, e.g. `request_vote(req) ->
-  io::Result<RequestVoteReply>` — internally creates a
-  `oneshot::channel`, ships the request to the Core with the sender,
-  and awaits the receiver for the reply.
+- Internally a thin wrapper that fans application/transport calls
+  into the Core's mailbox and awaits the inline reply.
 
-#### 15.1.3 Network Instance
+#### 15.1.3 Network
 
 - A single instance held by the Core. **No per-replicator parallel
   task** — the main runtime difference from openraft.
 - All outbound traffic flows through this one object.
-- Pattern: the Core calls `network.send_*(target, req).await` and
-  receives the reply directly. The Network instance owns the
-  send-and-await round-trip; outbound replies do **not** loop back
-  through the Core's mailbox. **Inbound RPCs *from* peers do
+- Pattern: the Core sends an outbound RPC and receives the reply
+  directly from the same call. Outbound replies do **not** loop
+  back through the Core's mailbox. **Inbound RPCs *from* peers do
   arrive through the mailbox** (§7) — the asymmetry is deliberate:
   the Core's loop is already waiting on the mailbox, so routing
   inbound RPCs there is free; outbound calls are cleaner as
   direct awaits.
 
-### 15.2 Traits
+#### 15.1.4 Storage
 
-#### 15.2.1 `Storage`
-
-- Trait, defined in `src/storage.rs`. Three methods —
-  `append(from: u64, ids: &[u64])`, `accept(idx: u64)`, and
-  `read(range: Range<u64>)` — all returning `io::Result<…>`. No
-  associated error type; storage failures are I/O failures.
-- `read` returns a [`LogState`] struct
-  (`{ entries, accepted, len, last_leader_index }`) defined in
-  `src/log_state.rs`, where `accepted` is an [`AcceptedContent`]
-  cursor and `last_leader_index` is the value of the last non-hole
-  entry across the whole log (§6.4) — so the Core picks up entries,
-  accepted cursor, log length, and highest granted leader_index in
-  one call.
-- Methods are declared as `fn ... -> impl Future + Send` rather than
-  `async fn`, so their returned futures are guaranteed `Send` and
-  can be `.await`ed inside the Core's `tokio::spawn`'d task.
-- See §6 for the log-model rationale, §6.2 for the storage surface,
-  and §6.3 for accepted-index semantics.
-
-#### 15.2.2 `Network`
-
-- Trait, so the application can plug in its own transport.
-- One method so far: `send_request_vote(target: u64, req: RequestVote)`
-  — forwards a `RequestVote` to the node identified by `target`,
-  awaits the reply, returns it. Returns `impl Future + Send` (not
-  `async fn`) so the future stays `Send`. More RPCs will be added.
-- A default `InProcessNetwork` ships with the crate; currently a
-  stub returning `Err`, to be filled in once multi-node setup is
-  wired.
+- Pluggable durability layer for the persistent log values (§6.2,
+  §6.3). The application supplies an implementation; `raf` is
+  agnostic to the backend.
+- Used only at startup (to rebuild the Core's in-memory mirror)
+  and on the steady-state write path (to persist new entries and
+  advance the accepted index).
+- Storage failures are I/O failures; there is no associated error
+  type.
 
 ### 15.3 Construction
 
