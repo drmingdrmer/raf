@@ -73,9 +73,12 @@ operations:
   write range are untouched.
 - **Advance the accepted index.** Monotone non-decreasing — once
   advanced, the cursor never regresses (§6.3).
-- **Read state at startup.** The running Core serves replication
-  out of an in-memory mirror; storage is consulted only when the
-  Core boots, to rebuild that mirror.
+- **Read state on demand.** Storage is the single source of truth
+  for protocol state — `raf` intentionally keeps no in-memory
+  mirror. Every handler that needs `len`, the accepted index, the
+  last leader index, or any log entries reads them from storage at
+  the time of use. This trades performance for simplicity and is a
+  deliberate scoping choice for the experimental project.
 
 Two protocol-level properties matter:
 
@@ -524,9 +527,10 @@ workspace sub-crates.
   calling peer.
 - Replies are produced inline within the same loop, mirroring
   openraft's `RaftCore`.
-- Holds an in-memory mirror of the persistent log state — populated
-  at startup from `Storage` and kept in lockstep with `Storage` on
-  every successful write.
+- **Stateless apart from the mailbox.** The Core keeps no in-memory
+  protocol state — every handler reads what it needs from `Storage`
+  on demand (see §6.2). Trades performance for simplicity; an
+  experimental-scope choice.
 
 #### 15.1.2 Handle (Control Handle)
 
@@ -555,9 +559,9 @@ workspace sub-crates.
 - Pluggable durability layer for the persistent log values (§6.2,
   §6.3). The application supplies an implementation; `raf` is
   agnostic to the backend.
-- Used only at startup (to rebuild the Core's in-memory mirror)
-  and on the steady-state write path (to persist new entries and
-  advance the accepted index).
+- Single source of truth for all protocol state. The Core consults
+  `Storage` on every read and write — there is no in-memory mirror
+  (see §6.2 and §15.1.1).
 - Storage failures are I/O failures; there is no associated error
   type.
 

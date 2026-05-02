@@ -47,16 +47,20 @@ pub trait Storage: Send + Sync + 'static {
 
     /// Read a snapshot of persistent log state.
     ///
-    /// Used by the Core at startup to rebuild its in-memory state
-    /// from persistent storage; not on the steady-state hot path.
-    /// Positions are 0-based into the log array; `range` is half-open
-    /// (`start..end`), with `end` exclusive.
+    /// Called by the Core on every state read — `raf` keeps no
+    /// in-memory mirror, so `Storage` is the single source of truth
+    /// for `len`, `accepted`, `last_leader_index`, and the entries.
+    /// Positions are 0-based into the log array; `range` is
+    /// half-open (`start..end`), with `end` exclusive. An empty
+    /// range (e.g. `0..0`) is a metadata-only read — `entries` comes
+    /// back empty, but `accepted`, `len`, and `last_leader_index`
+    /// are still populated.
     ///
     /// The returned [`LogState`] carries the entries at positions in
     /// `range` (each as `Option<u64>` — `None` is a hole), the
     /// persisted accepted index, the total length, and the value of
     /// the last non-hole entry across the entire log (the highest
     /// leader_index this node has ever stored — see `DESIGN.md`
-    /// §6.4), so the Core can rebuild full state in a single call.
+    /// §6.4).
     fn read(&self, range: Range<u64>) -> impl Future<Output = io::Result<LogState>> + Send;
 }
