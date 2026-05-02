@@ -12,6 +12,7 @@ mod log_state;
 mod network;
 mod raf;
 mod request_vote;
+mod request_vote_reply;
 mod storage;
 
 pub use crate::accepted_content::AcceptedContent;
@@ -21,4 +22,5 @@ pub use crate::network::InProcessNetwork;
 pub use crate::network::Network;
 pub use crate::raf::Raf;
 pub use crate::request_vote::RequestVote;
+pub use crate::request_vote_reply::RequestVoteReply;
 pub use crate::storage::Storage;

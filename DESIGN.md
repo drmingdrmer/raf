@@ -172,7 +172,19 @@ of the leader that proposed the entry at that position), so
 `accepted.leader_index` is `log[accepted.index - 1]` — the
 producer of the candidate's last accepted entry.
 
-(Voter comparison rules and the response shape are TBD; see §8.)
+**Reply** — defined in code as [`RequestVoteReply`] in
+`src/request_vote_reply.rs`:
+
+| Field | Meaning |
+|---|---|
+| `granted` | Whether the responder accepted the candidate's claim. |
+| `last_leader_index` | The responder's most-recently-seen leader_index. |
+| `accepted` | The responder's local [`AcceptedContent`]. |
+
+The reply always carries the responder's local state, so when
+`granted == false` the candidate can determine which condition
+caused the rejection — an occupied `leader_index`, or a stale
+`accepted` cursor (per §8.3).
 
 ## 8. Leader Election
 
@@ -473,10 +485,14 @@ workspace sub-crates.
 - A single instance held by the Core. **No per-replicator parallel
   task** — the main runtime difference from openraft.
 - All outbound traffic flows through this one object.
-- Pattern: Core hands a request to Network; Network sends it; the
-  response from the peer comes back into the Core's mailbox as
-  another event. Network is essentially a one-way pipe outbound,
-  with responses fed back through the mailbox.
+- Pattern: the Core calls `network.send_*(target, req).await` and
+  receives the reply directly. The Network instance owns the
+  send-and-await round-trip; outbound replies do **not** loop back
+  through the Core's mailbox. **Inbound RPCs *from* peers do
+  arrive through the mailbox** (§7) — the asymmetry is deliberate:
+  the Core's loop is already waiting on the mailbox, so routing
+  inbound RPCs there is free; outbound calls are cleaner as
+  direct awaits.
 
 ### 15.2 Traits
 
@@ -499,9 +515,13 @@ workspace sub-crates.
 #### 15.2.2 `Network`
 
 - Trait, so the application can plug in its own transport.
-- A default in-process implementation, `InProcessNetwork`, ships with
-  the crate, built on channels — for tests and single-process
-  benchmarks.
+- One method so far: `send_request_vote(target: u64, req: RequestVote)`
+  — forwards a `RequestVote` to the node identified by `target`,
+  awaits the reply, returns it. Returns `impl Future + Send` (not
+  `async fn`) so the future stays `Send`. More RPCs will be added.
+- A default `InProcessNetwork` ships with the crate; currently a
+  stub returning `Err`, to be filled in once multi-node setup is
+  wired.
 
 ### 15.3 Construction
 
