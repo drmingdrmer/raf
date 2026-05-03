@@ -10,7 +10,7 @@ use std::io;
 use std::ops::Range;
 
 use crate::Payload;
-use crate::log_state::LogState;
+use crate::log_state::HistoryState;
 
 /// Storage interface for the `raf` log.
 ///
@@ -25,7 +25,7 @@ use crate::log_state::LogState;
 /// rather than `async fn` so the returned futures are guaranteed
 /// `Send` — the Core runs as a `tokio::spawn`'d task and must be able
 /// to `.await` storage calls across task boundaries.
-pub trait Storage: Send + Sync + 'static {
+pub trait HistoryStorage: Send + Sync + 'static {
     /// Write `ids` at positions `[from..from + ids.len())`,
     /// overwriting any prior values at those positions. Positions
     /// outside that range are unchanged.
@@ -36,10 +36,10 @@ pub trait Storage: Send + Sync + 'static {
     /// stale trailing entries persist in storage until they are
     /// themselves overwritten by a future `append`. See
     /// `DESIGN.md` §6.2.
-    fn append(&mut self, ids: &[u64], payloads: Vec<Payload>) -> impl Future<Output = io::Result<()>> + Send;
+    fn append_history(&mut self, ids: &[u64], payloads: Vec<Payload>) -> impl Future<Output = io::Result<()>> + Send;
 
     /// Truncate history after `after` (exclusive)
-    fn truncate(&mut self, after: u64) -> impl Future<Output = io::Result<()>> + Send;
+    fn truncate_history(&mut self, after: u64) -> impl Future<Output = io::Result<()>> + Send;
 
     /// Read a snapshot of persistent log state.
     ///
@@ -52,11 +52,11 @@ pub trait Storage: Send + Sync + 'static {
     /// back empty, but `accepted`, `len`, and `last_leader_index`
     /// are still populated.
     ///
-    /// The returned [`LogState`] carries the entries at positions in
+    /// The returned [`HistoryState`] carries the entries at positions in
     /// `range` (each as `Option<u64>` — `None` is a hole), the
     /// persisted accepted index, the total length, and the value of
     /// the last non-hole entry across the entire log (the highest
     /// leader_index this node has ever stored — see `DESIGN.md`
     /// §6.4).
-    fn read(&self, range: Range<u64>) -> impl Future<Output = io::Result<LogState>> + Send;
+    fn read(&self, range: Range<u64>) -> impl Future<Output = io::Result<HistoryState>> + Send;
 }

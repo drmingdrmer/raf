@@ -1,5 +1,5 @@
-//! [`LogState`] — the snapshot of persistent log state returned by
-//! [`crate::Storage::read`].
+//! [`HistoryState`] — the snapshot of persistent log state returned by
+//! [`crate::HistoryStorage::read`].
 
 use crate::accepted_content::AcceptedContent;
 
@@ -9,7 +9,7 @@ use crate::accepted_content::AcceptedContent;
 /// Core needs to rebuild its in-memory state on startup: the
 /// accepted-content cursor and the total log length.
 #[derive(Debug)]
-pub struct LogState {
+pub struct HistoryState {
     /// Entries at the positions requested in the `read` call.
     ///
     /// `Some(id)` is a written entry; `None` is a *hole* — a
@@ -44,7 +44,7 @@ pub struct LogState {
     pub last_leader_index: Option<u64>,
 }
 
-impl LogState {
+impl HistoryState {
     /// Whether the persisted [`accepted`](Self::accepted) cursor
     /// is *valid* — i.e., the entire stored log is accepted
     /// (`accepted.index >= len`).

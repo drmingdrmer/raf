@@ -8,11 +8,11 @@ use tokio::sync::mpsc::UnboundedSender;
 use tokio::sync::mpsc::unbounded_channel;
 use tokio::sync::oneshot;
 
+use crate::history_storage::HistoryStorage;
 use crate::leader_state::LeaderState;
 use crate::network::Network;
 use crate::request_vote::RequestVote;
 use crate::request_vote_reply::RequestVoteReply;
-use crate::storage::Storage;
 use crate::write_reply::WriteReply;
 use crate::write_request::WriteRequest;
 
@@ -42,7 +42,7 @@ pub(crate) enum Event {
 
 pub(crate) struct Core<S, N>
 where
-    S: Storage,
+    S: HistoryStorage,
     N: Network,
 {
     storage: S,
@@ -59,7 +59,7 @@ where
 
 impl<S, N> Core<S, N>
 where
-    S: Storage,
+    S: HistoryStorage,
     N: Network,
 {
     /// Spawn the Core onto the current Tokio runtime; return a sender

@@ -4,8 +4,8 @@ use std::sync::Arc;
 
 use crate::core::Core;
 use crate::handle::Handle;
+use crate::history_storage::HistoryStorage;
 use crate::network::Network;
-use crate::storage::Storage;
 
 /// A running `raf` node.
 ///
@@ -26,7 +26,7 @@ impl Raf {
     /// (see `DESIGN.md` §15.1.3).
     pub fn new<S, N>(storage: S, network: N) -> Self
     where
-        S: Storage,
+        S: HistoryStorage,
         N: Network,
     {
         let mailbox_tx = Core::spawn(storage, Arc::new(network));
