@@ -5,7 +5,7 @@ use crate::clock::Clock;
 
 pub struct ClockState {
     pub len: u64,
-    pub clocks: Vec<u64>,
+    pub clocks: Vec<Clock>,
 }
 
 pub trait ClockStorage: Send + Sync + 'static {

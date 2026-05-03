@@ -7,7 +7,6 @@
 //! compare freshness against their own state. See `DESIGN.md`
 //! §7.1 and §8.
 
-use crate::accepted_content::AcceptedContent;
 use crate::clock::Clock;
 use crate::hisotory_id::HistoryId;
 

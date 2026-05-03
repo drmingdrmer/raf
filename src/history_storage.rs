@@ -10,6 +10,7 @@ use std::io;
 use std::ops::Range;
 
 use crate::Cmd;
+use crate::hisotory_id::HistoryId;
 use crate::log_state::HistoryState;
 
 /// Storage interface for the `raf` log.
@@ -59,4 +60,16 @@ pub trait HistoryStorage: Send + Sync + 'static {
     /// leader_index this node has ever stored — see `DESIGN.md`
     /// §6.4).
     fn read(&self, range: Range<u64>) -> impl Future<Output = io::Result<HistoryState>> + Send;
+
+    fn last(&self) -> impl Future<Output = io::Result<Option<HistoryId>>> + Send {
+        async move {
+            let state = self.read(0..0).await?;
+            if state.len == 0 {
+                Ok(None)
+            } else {
+                let state = self.read(state.len - 1..state.len).await?;
+                Ok(state.entries[0])
+            }
+        }
+    }
 }
