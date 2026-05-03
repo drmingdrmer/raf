@@ -9,6 +9,7 @@ use std::future::Future;
 use std::io;
 use std::ops::Range;
 
+use crate::Payload;
 use crate::log_state::LogState;
 
 /// Storage interface for the `raf` log.
@@ -35,15 +36,10 @@ pub trait Storage: Send + Sync + 'static {
     /// stale trailing entries persist in storage until they are
     /// themselves overwritten by a future `append`. See
     /// `DESIGN.md` §6.2.
-    fn append(&mut self, from: u64, ids: &[u64]) -> impl Future<Output = io::Result<()>> + Send;
+    fn append(&mut self, ids: &[u64], payloads: Vec<Payload>) -> impl Future<Output = io::Result<()>> + Send;
 
-    /// Persist the accepted index — the boundary above which entries
-    /// have not yet been confirmed identical to the leader's log.
-    ///
-    /// The accepted index is monotone non-decreasing: each successful
-    /// `accept(idx)` advances the cursor to `idx` (or leaves it
-    /// unchanged if `idx` is less than the current value).
-    fn accept(&mut self, idx: u64) -> impl Future<Output = io::Result<()>> + Send;
+    /// Truncate history after `after` (exclusive)
+    fn truncate(&mut self, after: u64) -> impl Future<Output = io::Result<()>> + Send;
 
     /// Read a snapshot of persistent log state.
     ///
