@@ -8,7 +8,10 @@ use tokio::sync::mpsc::UnboundedSender;
 use tokio::sync::mpsc::unbounded_channel;
 use tokio::sync::oneshot;
 
+use crate::clock_storage::ClockArray;
+use crate::clock_storage::ClockChunk;
 use crate::clock_storage::ClockStorage;
+use crate::history_storage::CmdArray;
 use crate::history_storage::HistoryStorage;
 use crate::leader_state::LeaderState;
 use crate::network::Network;
@@ -41,15 +44,12 @@ pub(crate) enum Event {
     },
 }
 
-pub(crate) struct Core<CStorage, HStorage, N>
-where
-    CStorage: ClockStorage,
-    HStorage: HistoryStorage,
-    N: Network,
+pub(crate) struct Core<N>
+where N: Network
 {
-    clocks: CStorage,
+    clock_array: ClockArray,
 
-    history: HStorage,
+    history: CmdArray,
     /// Held in `Arc` so outbound RPCs can be cloned into spawned
     /// tasks (see `DESIGN.md` §15.1.3).
     #[allow(dead_code)]
@@ -61,17 +61,15 @@ where
     mailbox: UnboundedReceiver<Event>,
 }
 
-impl<CStorage, HStorage, N> Core<CStorage, HStorage, N>
-where
-    CStorage: ClockStorage,
-    HStorage: HistoryStorage,
-    N: Network,
+impl<N> Core<N>
+where N: Network
 {
     /// Spawn the Core onto the current Tokio runtime; return a sender
     /// to its mailbox.
-    pub(crate) fn spawn(storage: HStorage, network: Arc<N>) -> UnboundedSender<Event> {
+    pub(crate) fn spawn(clock_storage: ClockArray, storage: CmdArray, network: Arc<N>) -> UnboundedSender<Event> {
         let (tx, rx) = unbounded_channel();
         let core = Self {
+            clock_storage,
             history: storage,
             network,
             leader: None,

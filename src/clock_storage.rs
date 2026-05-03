@@ -33,7 +33,7 @@ impl ClockArray {
         self.clocks[since as usize..end as usize].copy_from_slice(clocks);
     }
 
-    pub fn read(&self, range: Range<u64>) -> ClockState {
+    pub fn read(&self, range: Range<u64>) -> ClockChunk {
         let len = self.len();
         let clocks = if range.start < len {
             let end = range.end.min(len);
@@ -41,7 +41,7 @@ impl ClockArray {
         } else {
             Vec::new()
         };
-        ClockState { len, clocks }
+        ClockChunk { len, entries: clocks }
     }
 
     pub fn last(&self) -> Option<(Index, Clock)> {

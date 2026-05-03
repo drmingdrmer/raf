@@ -11,7 +11,7 @@ use std::ops::Range;
 
 use crate::Cmd;
 use crate::hisotory_id::HistoryId;
-use crate::log_state::HistoryState;
+use crate::log_state::CmdChunk;
 
 pub struct CmdArray {
     cmds: Vec<Cmd>,
@@ -34,13 +34,17 @@ impl CmdArray {
         self.cmds.truncate(after as usize);
     }
 
-    pub fn read(&self, range: Range<u64>) -> Vec<Cmd> {
-        if range.start < self.len() {
-            let end = range.end.min(self.len());
+    pub fn read(&self, range: Range<u64>) -> CmdChunk {
+        let len = self.len();
+        let cmds = if range.start < len {
+            let end = range.end.min(len);
             self.cmds[range.start as usize..end as usize].to_vec()
         } else {
             Vec::new()
-        }
+        };
+
+        CmdChunk::new(len, cmds)
+    }
 }
 
 /// Storage interface for the `raf` log.
