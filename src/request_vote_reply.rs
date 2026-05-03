@@ -19,10 +19,10 @@ pub struct RequestVoteReply {
     /// of. If `granted` is false because the candidate's
     /// `leader_index` was already occupied or was not higher than
     /// this value, the candidate uses this to skip ahead.
-    pub last_leader_index: u64,
+    pub clock_len: u64,
 
     /// The responder's local [`AcceptedContent`]. Used by the
     /// candidate as the freshness comparator if the vote was
     /// rejected on freshness grounds.
-    pub accepted: AcceptedContent,
+    pub last_history: AcceptedContent,
 }

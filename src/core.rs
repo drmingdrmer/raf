@@ -111,11 +111,14 @@ where N: Network
     ///    is at least as up-to-date as we are (§6.3).
     async fn handle_request_vote(&mut self, req: RequestVote, reply_tx: oneshot::Sender<RequestVoteReply>) {
         let local_clock_len = self.clock_storage.len();
+        let local_history_len = self.history.len();
+        let local_last_history = self.clock_storage.read_one(local_clock_len - 1).unwrap();
+
         if req.clock < local_clock_len {
             let _ = reply_tx.send(RequestVoteReply {
                 granted: false,
-                last_leader_index: local_clock_len,
-                accepted: None,
+                clock_len: local_clock_len,
+                last_history: None,
             });
             return;
         }
@@ -147,8 +150,8 @@ where N: Network
 
         let _ = reply_tx.send(RequestVoteReply {
             granted,
-            last_leader_index,
-            accepted: log.accepted,
+            clock_len: last_leader_index,
+            last_history: log.accepted,
         });
     }
 
