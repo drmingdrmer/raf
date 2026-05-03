@@ -36,10 +36,10 @@ pub trait HistoryStorage: Send + Sync + 'static {
     /// stale trailing entries persist in storage until they are
     /// themselves overwritten by a future `append`. See
     /// `DESIGN.md` §6.2.
-    fn append_history(&mut self, ids: &[u64], payloads: Vec<Payload>) -> impl Future<Output = io::Result<()>> + Send;
+    fn append(&mut self, payloads: Vec<Payload>) -> impl Future<Output = io::Result<()>> + Send;
 
     /// Truncate history after `after` (exclusive)
-    fn truncate_history(&mut self, after: u64) -> impl Future<Output = io::Result<()>> + Send;
+    fn truncate(&mut self, after: u64) -> impl Future<Output = io::Result<()>> + Send;
 
     /// Read a snapshot of persistent log state.
     ///

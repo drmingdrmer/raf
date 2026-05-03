@@ -1,6 +1,7 @@
 //! [`HistoryState`] — the snapshot of persistent log state returned by
 //! [`crate::HistoryStorage::read`].
 
+use crate::Payload;
 use crate::accepted_content::AcceptedContent;
 
 /// Snapshot of the persistent log state.
@@ -10,6 +11,10 @@ use crate::accepted_content::AcceptedContent;
 /// accepted-content cursor and the total log length.
 #[derive(Debug)]
 pub struct HistoryState {
+    /// Total number of entries currently in the log, independent of
+    /// the requested range.
+    pub len: u64,
+
     /// Entries at the positions requested in the `read` call.
     ///
     /// `Some(id)` is a written entry; `None` is a *hole* — a
@@ -17,18 +22,7 @@ pub struct HistoryState {
     /// because `Storage::append` accepts any starting position,
     /// so entries may be written out of order. See `DESIGN.md`
     /// §6.2.
-    pub entries: Vec<Option<u64>>,
-
-    /// Persistent accepted-content cursor splitting the log into
-    /// a decided prefix (positions `< accepted.index`, confirmed
-    /// identical to the leader's log) and a speculative suffix
-    /// (positions `>= accepted.index`, still subject to
-    /// overwrite). See `DESIGN.md` §6.3.
-    pub accepted: AcceptedContent,
-
-    /// Total number of entries currently in the log, independent of
-    /// the requested range.
-    pub len: u64,
+    pub entries: Vec<Payload>,
 
     /// The value of the last non-hole entry across the *entire*
     /// log (independent of the requested range), or `None` if the
