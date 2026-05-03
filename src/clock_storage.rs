@@ -2,6 +2,7 @@ use std::io;
 use std::ops::Range;
 
 use crate::clock::Clock;
+use crate::Index;
 
 pub struct ClockState {
     pub len: u64,
@@ -13,7 +14,7 @@ pub trait ClockStorage: Send + Sync + 'static {
 
     fn read(&self, range: Range<u64>) -> impl Future<Output = io::Result<ClockState>> + Send;
 
-    fn last(&self) -> impl Future<Output = io::Result<u64>> + Send {
+    fn last(&self) -> impl Future<Output = io::Result<Option<(Index,)>>> + Send {
         async move {
             let state = self.read(0..0).await?;
             if state.len == 0 {
