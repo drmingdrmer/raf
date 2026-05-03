@@ -9,7 +9,7 @@ use std::future::Future;
 use std::io;
 use std::ops::Range;
 
-use crate::Payload;
+use crate::Cmd;
 use crate::log_state::HistoryState;
 
 /// Storage interface for the `raf` log.
@@ -36,7 +36,7 @@ pub trait HistoryStorage: Send + Sync + 'static {
     /// stale trailing entries persist in storage until they are
     /// themselves overwritten by a future `append`. See
     /// `DESIGN.md` §6.2.
-    fn append(&mut self, payloads: Vec<Payload>) -> impl Future<Output = io::Result<()>> + Send;
+    fn append(&mut self, payloads: Vec<Cmd>) -> impl Future<Output = io::Result<()>> + Send;
 
     /// Truncate history after `after` (exclusive)
     fn truncate(&mut self, after: u64) -> impl Future<Output = io::Result<()>> + Send;

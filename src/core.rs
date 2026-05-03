@@ -13,6 +13,7 @@ use crate::leader_state::LeaderState;
 use crate::network::Network;
 use crate::request_vote::RequestVote;
 use crate::request_vote_reply::RequestVoteReply;
+use crate::time_storage::ClockStorage;
 use crate::write_reply::WriteReply;
 use crate::write_request::WriteRequest;
 
@@ -40,12 +41,15 @@ pub(crate) enum Event {
     },
 }
 
-pub(crate) struct Core<S, N>
+pub(crate) struct Core<CStorage, HStorage, N>
 where
-    S: HistoryStorage,
+    CStorage: ClockStorage,
+    HStorage: HistoryStorage,
     N: Network,
 {
-    storage: S,
+    clocks: ClockStorage,
+
+    history: HStorage,
     /// Held in `Arc` so outbound RPCs can be cloned into spawned
     /// tasks (see `DESIGN.md` §15.1.3).
     #[allow(dead_code)]
@@ -57,17 +61,18 @@ where
     mailbox: UnboundedReceiver<Event>,
 }
 
-impl<S, N> Core<S, N>
+impl<CStorage, HStorage, N> Core<CStorage, HStorage, N>
 where
-    S: HistoryStorage,
+    CStorage: ClockStorage,
+    HStorage: HistoryStorage,
     N: Network,
 {
     /// Spawn the Core onto the current Tokio runtime; return a sender
     /// to its mailbox.
-    pub(crate) fn spawn(storage: S, network: Arc<N>) -> UnboundedSender<Event> {
+    pub(crate) fn spawn(storage: HStorage, network: Arc<N>) -> UnboundedSender<Event> {
         let (tx, rx) = unbounded_channel();
         let core = Self {
-            storage,
+            history: storage,
             network,
             leader: None,
             mailbox: rx,
@@ -109,7 +114,7 @@ where
     async fn handle_request_vote(&mut self, req: RequestVote, reply_tx: oneshot::Sender<RequestVoteReply>) {
         // Empty range: only the metadata (len, accepted,
         // last_leader_index) is needed for the decision.
-        let log = self.storage.read(0..0).await.expect("storage read failed during RequestVote");
+        let log = self.history.read(0..0).await.expect("storage read failed during RequestVote");
 
         let position_unclaimed = req.leader_index >= log.len;
         let fresh_enough = req.accepted >= log.accepted;
@@ -123,7 +128,7 @@ where
             // Storage failure here is unrecoverable for the Core —
             // the durability story is broken, so bail loudly rather
             // than silently degrade the grant into a reject.
-            self.storage
+            self.history
                 .append(req.leader_index, &[req.leader_index])
                 .await
                 .expect("storage append failed during RequestVote grant");

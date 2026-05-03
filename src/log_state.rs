@@ -1,7 +1,7 @@
 //! [`HistoryState`] — the snapshot of persistent log state returned by
 //! [`crate::HistoryStorage::read`].
 
-use crate::Payload;
+use crate::Cmd;
 use crate::accepted_content::AcceptedContent;
 
 /// Snapshot of the persistent log state.
@@ -22,35 +22,5 @@ pub struct HistoryState {
     /// because `Storage::append` accepts any starting position,
     /// so entries may be written out of order. See `DESIGN.md`
     /// §6.2.
-    pub entries: Vec<Payload>,
-
-    /// The value of the last non-hole entry across the *entire*
-    /// log (independent of the requested range), or `None` if the
-    /// log has no written entries.
-    ///
-    /// Each entry value is itself a leader_index, and the protocol
-    /// invariant guarantees these values are monotone non-decreasing
-    /// along the log — so this is also the highest leader_index this
-    /// node has ever stored, i.e. the highest vote it has ever
-    /// granted at any position. The Core uses it during leader
-    /// election to decide whether an incoming `RequestVote` outranks
-    /// every prior grant. See `DESIGN.md` §6.4.
-    pub last_leader_index: Option<u64>,
-}
-
-impl HistoryState {
-    /// Whether the persisted [`accepted`](Self::accepted) cursor
-    /// is *valid* — i.e., the entire stored log is accepted
-    /// (`accepted.index >= len`).
-    ///
-    /// When `false`, storage holds a speculative tail of entries
-    /// past `accepted.index` that have not yet been confirmed by
-    /// the current leader. The Core uses this distinction at
-    /// startup: a valid cursor means the entire stored log is
-    /// safe to use as-is; an invalid one means the trailing
-    /// entries must be re-validated against the next leader
-    /// before they can be relied on. See `DESIGN.md` §6.3.
-    pub fn is_accepted_valid(&self) -> bool {
-        self.accepted.index >= self.len
-    }
+    pub entries: Vec<Cmd>,
 }
