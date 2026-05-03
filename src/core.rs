@@ -47,7 +47,7 @@ where
     HStorage: HistoryStorage,
     N: Network,
 {
-    clocks: ClockStorage,
+    clocks: CStorage,
 
     history: HStorage,
     /// Held in `Arc` so outbound RPCs can be cloned into spawned
