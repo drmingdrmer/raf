@@ -11,6 +11,7 @@ use tokio::sync::oneshot;
 use crate::clock_storage::ClockArray;
 use crate::clock_storage::ClockChunk;
 use crate::clock_storage::ClockStorage;
+use crate::hisotory_id::HistoryId;
 use crate::history_storage::CmdArray;
 use crate::history_storage::HistoryStorage;
 use crate::leader_state::LeaderState;
@@ -112,13 +113,13 @@ where N: Network
     async fn handle_request_vote(&mut self, req: RequestVote, reply_tx: oneshot::Sender<RequestVoteReply>) {
         let local_clock_len = self.clock_storage.len();
         let local_history_len = self.history.len();
-        let local_last_history = self.clock_storage.read_one(local_clock_len - 1).unwrap();
+        let local_last_history_clock = self.clock_storage.read_one(local_clock_len - 1).unwrap();
 
         if req.clock < local_clock_len {
             let _ = reply_tx.send(RequestVoteReply {
                 granted: false,
                 clock_len: local_clock_len,
-                last_history: None,
+                last_history: HistoryId::new(local_last_history_clock, local_history_len - 1),
             });
             return;
         }

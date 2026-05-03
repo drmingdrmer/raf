@@ -1,6 +1,6 @@
 //! [`RequestVoteReply`] — response to [`crate::RequestVote`].
 
-use crate::accepted_content::AcceptedContent;
+use crate::hisotory_id::HistoryId;
 
 /// Response to a [`crate::RequestVote`] request.
 ///
@@ -24,5 +24,5 @@ pub struct RequestVoteReply {
     /// The responder's local [`AcceptedContent`]. Used by the
     /// candidate as the freshness comparator if the vote was
     /// rejected on freshness grounds.
-    pub last_history: AcceptedContent,
+    pub last_history: HistoryId,
 }
