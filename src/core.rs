@@ -110,7 +110,15 @@ where N: Network
     /// 2. `req.accepted >= log.accepted` — lex-compared on `(leader_index, index)`; the candidate
     ///    is at least as up-to-date as we are (§6.3).
     async fn handle_request_vote(&mut self, req: RequestVote, reply_tx: oneshot::Sender<RequestVoteReply>) {
-        let local_clock_len = self.clocks.read(0..0).await?.len;
+        let local_clock_len = self.clock_storage.len();
+        if req.clock < local_clock_len {
+            let _ = reply_tx.send(RequestVoteReply {
+                granted: false,
+                last_leader_index: local_clock_len,
+                accepted: None,
+            });
+            return;
+        }
 
         // Empty range: only the metadata (len, accepted,
         // last_leader_index) is needed for the decision.
