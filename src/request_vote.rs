@@ -8,6 +8,8 @@
 //! §7.1 and §8.
 
 use crate::accepted_content::AcceptedContent;
+use crate::clock::Clock;
+use crate::hisotory_id::HistoryId;
 
 /// Leader-election request, modeled on Raft's `RequestVote` RPC.
 ///
@@ -21,11 +23,7 @@ use crate::accepted_content::AcceptedContent;
 pub struct RequestVote {
     /// The candidate's chosen leader identity — the next index past
     /// the end of its local log.
-    pub leader_index: u64,
+    pub clock: Clock,
 
-    /// The candidate's last known accepted content. Voters use this
-    /// as the freshness comparator: a vote is granted only if the
-    /// candidate's `accepted` is at least as up-to-date as the
-    /// voter's own. See `DESIGN.md` §6.3 and §8.
-    pub accepted: AcceptedContent,
+    pub last_history: HistoryId,
 }

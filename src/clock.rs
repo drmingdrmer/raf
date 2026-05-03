@@ -1,4 +1,1 @@
-#[derive(Debug, Clone)]
-pub struct Clock {
-    pub clock: u64,
-}
+pub type Clock = u64;

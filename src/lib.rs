@@ -7,24 +7,28 @@
 
 mod accepted_content;
 mod clock;
+mod clock_storage;
 mod cmd;
 mod core;
 mod handle;
+mod hisotory_id;
 mod history_storage;
+mod index;
 mod leader_state;
 mod log_state;
 mod network;
 mod raf;
 mod request_vote;
 mod request_vote_reply;
-mod time_storage;
 mod write_reply;
 mod write_request;
 
 pub use self::accepted_content::AcceptedContent;
+pub use self::clock::Clock;
 pub use self::cmd::Cmd;
 pub use self::handle::Handle;
 pub use self::history_storage::HistoryStorage;
+pub use self::index::Index;
 pub use self::log_state::HistoryState;
 pub use self::network::InProcessNetwork;
 pub use self::network::Network;

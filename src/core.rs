@@ -8,12 +8,12 @@ use tokio::sync::mpsc::UnboundedSender;
 use tokio::sync::mpsc::unbounded_channel;
 use tokio::sync::oneshot;
 
+use crate::clock_storage::ClockStorage;
 use crate::history_storage::HistoryStorage;
 use crate::leader_state::LeaderState;
 use crate::network::Network;
 use crate::request_vote::RequestVote;
 use crate::request_vote_reply::RequestVoteReply;
-use crate::time_storage::ClockStorage;
 use crate::write_reply::WriteReply;
 use crate::write_request::WriteRequest;
 
@@ -116,7 +116,7 @@ where
         // last_leader_index) is needed for the decision.
         let log = self.history.read(0..0).await.expect("storage read failed during RequestVote");
 
-        let position_unclaimed = req.leader_index >= log.len;
+        let position_unclaimed = req.clock >= log.len;
         let fresh_enough = req.accepted >= log.accepted;
         let granted = position_unclaimed && fresh_enough;
 
@@ -129,10 +129,10 @@ where
             // the durability story is broken, so bail loudly rather
             // than silently degrade the grant into a reject.
             self.history
-                .append(req.leader_index, &[req.leader_index])
+                .append(req.clock, &[req.clock])
                 .await
                 .expect("storage append failed during RequestVote grant");
-            req.leader_index
+            req.clock
         } else {
             log.last_leader_index.unwrap_or(0)
         };
