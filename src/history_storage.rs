@@ -13,6 +13,36 @@ use crate::Cmd;
 use crate::hisotory_id::HistoryId;
 use crate::log_state::HistoryState;
 
+pub struct CmdArray {
+    cmds: Vec<Cmd>,
+}
+
+impl CmdArray {
+    pub fn new(cmds: Vec<Cmd>) -> Self {
+        Self { cmds }
+    }
+
+    pub fn len(&self) -> u64 {
+        self.cmds.len() as u64
+    }
+
+    pub fn append(&mut self, cmds: Vec<Cmd>) {
+        self.cmds.extend(cmds);
+    }
+
+    pub fn truncate(&mut self, after: u64) {
+        self.cmds.truncate(after as usize);
+    }
+
+    pub fn read(&self, range: Range<u64>) -> Vec<Cmd> {
+        if range.start < self.len() {
+            let end = range.end.min(self.len());
+            self.cmds[range.start as usize..end as usize].to_vec()
+        } else {
+            Vec::new()
+        }
+}
+
 /// Storage interface for the `raf` log.
 ///
 /// The log is a sequence of `u64` identifiers, plus a single

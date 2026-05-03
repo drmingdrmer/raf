@@ -6,6 +6,7 @@
 //! the full design.
 
 mod accepted_content;
+mod array_chunk;
 mod clock;
 mod clock_storage;
 mod cmd;
@@ -24,6 +25,7 @@ mod write_reply;
 mod write_request;
 
 pub use self::accepted_content::AcceptedContent;
+pub use self::array_chunk::ArrayChunk;
 pub use self::clock::Clock;
 pub use self::cmd::Cmd;
 pub use self::handle::Handle;
