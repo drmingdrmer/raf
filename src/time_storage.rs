@@ -1,13 +1,15 @@
 use std::io;
 use std::ops::Range;
 
+use crate::clock::Clock;
+
 pub struct ClockState {
     pub len: u64,
     pub clocks: Vec<u64>,
 }
 
 pub trait ClockStorage: Send + Sync + 'static {
-    fn update(&mut self, since: u64, clocks: &[u64]) -> impl Future<Output = io::Result<()>> + Send;
+    fn update(&mut self, since: u64, clocks: &[Clock]) -> impl Future<Output = io::Result<()>> + Send;
 
     fn read(&self, range: Range<u64>) -> impl Future<Output = io::Result<ClockState>> + Send;
 

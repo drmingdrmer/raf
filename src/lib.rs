@@ -6,6 +6,7 @@
 //! the full design.
 
 mod accepted_content;
+mod clock;
 mod cmd;
 mod core;
 mod handle;
