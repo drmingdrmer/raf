@@ -47,7 +47,7 @@ pub(crate) enum Event {
 pub(crate) struct Core<N>
 where N: Network
 {
-    clock_array: ClockArray,
+    clock_storage: ClockArray,
 
     history: CmdArray,
     /// Held in `Arc` so outbound RPCs can be cloned into spawned
