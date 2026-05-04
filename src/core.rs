@@ -134,9 +134,11 @@ where N: Network
                 continue;
             }
 
+            let last_history_id = self.last_history_id().await;
+
             let req = RequestVote {
                 clock,
-                last_history: HistoryId::new(clock, self.history.len()),
+                last_history: HistoryId::new(clock, self.history.len() - 1),
             };
             let network = Arc::clone(&self.network);
             let reply_tx = self.mailbox.clone();
@@ -238,5 +240,17 @@ where N: Network
         let _ = reply_tx.send(Err(io::Error::other(
             "leader-side write replication not yet implemented",
         )));
+    }
+
+    async fn last_history_id(&self) -> Option<HistoryId> {
+        let history_len = self.history.len();
+        if history_len == 0 {
+            return None;
+        }
+
+        let index = history_len - 1;
+
+        let last_history_clock = self.clock_storage.read_one(index).unwrap();
+        Some(HistoryId::new(last_history_clock, index))
     }
 }
