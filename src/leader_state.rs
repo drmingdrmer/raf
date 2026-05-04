@@ -6,7 +6,10 @@
 //! (`leader: Some(_)`); the `established` flag distinguishes the
 //! two.
 
+use std::collections::BTreeMap;
 use std::collections::HashSet;
+
+use crate::NodeId;
 
 /// Election / leadership state.
 ///
@@ -32,4 +35,6 @@ pub(crate) struct LeaderState {
     /// the same `LeaderState` instance. Only an established leader
     /// may serve application writes.
     pub established: bool,
+
+    pub replications: BTreeMap<NodeId, ReplicationState>,
 }

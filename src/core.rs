@@ -240,12 +240,20 @@ where N: Network
     }
 
     async fn establish_leader(&mut self) {
+        let leader = 
         self.leader.as_mut().unwrap().established = true;
+        
+        sel
+
         let n = self.clock_storage.len() - self.history.len();
         // create a vec of Cmds of length n, with each Cmd being a No-op
         let cmds = vec![Cmd::empty(); n as usize];
-        self.history.append(cmds)
+        self.history.append(cmds);
+
+        self.try_initialize_replication().await;
     }
+
+    async fn try_initialize_replication(&mut self) {}
 
     /// Handle an application write request per `DESIGN.md` §9.
     ///
