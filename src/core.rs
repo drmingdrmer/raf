@@ -114,6 +114,7 @@ where N: Network
         let local_clock_len = self.clock_storage.len();
         let local_history_len = self.history.len();
         let local_last_history_clock = self.clock_storage.read_one(local_clock_len - 1).unwrap();
+        let local_last_history
 
         if req.clock < local_clock_len {
             let _ = reply_tx.send(RequestVoteReply {
@@ -123,6 +124,8 @@ where N: Network
             });
             return;
         }
+        
+        if req.last_history <= local_last_history_clock
 
         // Empty range: only the metadata (len, accepted,
         // last_leader_index) is needed for the decision.
