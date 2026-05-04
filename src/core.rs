@@ -9,6 +9,7 @@ use tokio::sync::mpsc::unbounded_channel;
 use tokio::sync::oneshot;
 
 use crate::Clock;
+use crate::Cmd;
 use crate::Membership;
 use crate::NodeId;
 use crate::clock_storage::ClockArray;
@@ -228,10 +229,22 @@ where N: Network
 
         if reply.granted {
             leader.granted_votes.insert(target);
+            let granted_votes = leader.granted_votes.iter().cloned().collect::<Vec<_>>();
+            if self.membership.is_quorum(&granted_votes) {
+                self.establish_leader().await;
+            }
         } else {
             self.leader = None;
-            return None;
         }
+        None
+    }
+
+    async fn establish_leader(&mut self) {
+        self.leader.as_mut().unwrap().established = true;
+        let n = self.clock_storage.len() - self.history.len();
+        // create a vec of Cmds of length n, with each Cmd being a No-op
+        let cmds = vec![Cmd::empty(); n as usize];
+        self.history.append(cmds)
     }
 
     /// Handle an application write request per `DESIGN.md` §9.

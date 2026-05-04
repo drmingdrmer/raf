@@ -25,7 +25,7 @@ pub(crate) struct LeaderState {
     /// Node IDs that have granted votes for `leader_index`,
     /// including this node itself. Granting is monotone: a peer
     /// is added on the first granted reply and never removed.
-    pub granted_votes: HashSet<u64>,
+    pub granted_votes: HashSet<NodeId>,
 
     /// `true` once the granted tally has reached a quorum of the
     /// cluster. Flips false → true once and never reverses within
