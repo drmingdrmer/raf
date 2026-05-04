@@ -49,14 +49,20 @@ where N: Network
     clock_storage: ClockArray,
 
     history: CmdArray,
+    
     /// Held in `Arc` so outbound RPCs can be cloned into spawned
     /// tasks (see `DESIGN.md` §15.1.3).
     #[allow(dead_code)]
     network: Arc<N>,
+    
+    membership: Membership,
+    
+    
     /// Election / leadership state. `None` on followers; `Some`
     /// while a candidate or established leader. See
     /// [`LeaderState`] and `DESIGN.md` §8.4.
     leader: Option<LeaderState>,
+    
     mailbox: UnboundedReceiver<Event>,
 }
 
@@ -113,8 +119,14 @@ where N: Network
         });
 
         self.clock_storage.update(clock, &[clock]);
+        
+        self.spawn_request_vote_rpcs(clock).await?;
 
         Ok(())
+    }
+    
+    async fn spawn_request_vote_rpcs(&mut self, clock: u64) -> Result<(), io::Error> {
+        
     }
 
     /// Decide an inbound `RequestVote` per `DESIGN.md` §8.3.

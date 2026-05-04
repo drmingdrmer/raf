@@ -23,6 +23,7 @@ mod request_vote;
 mod request_vote_reply;
 mod write_reply;
 mod write_request;
+mod membership;
 
 pub use self::accepted_content::AcceptedContent;
 pub use self::array_chunk::ArrayChunk;
