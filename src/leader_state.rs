@@ -20,7 +20,7 @@ use std::collections::HashSet;
 pub(crate) struct LeaderState {
     /// The candidate's chosen leader_index — its identity for this
     /// election.
-    pub leader_index: u64,
+    pub clock: u64,
 
     /// Node IDs that have granted votes for `leader_index`,
     /// including this node itself. Granting is monotone: a peer

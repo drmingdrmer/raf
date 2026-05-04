@@ -8,6 +8,7 @@ use tokio::sync::mpsc::UnboundedSender;
 use tokio::sync::mpsc::unbounded_channel;
 use tokio::sync::oneshot;
 
+use crate::Clock;
 use crate::Membership;
 use crate::NodeId;
 use crate::clock_storage::ClockArray;
@@ -120,7 +121,7 @@ where N: Network
         let clock = self.clock_storage.len();
 
         self.leader = Some(LeaderState {
-            leader_index: self.clock_storage.len(),
+            clock: self.clock_storage.len(),
             granted_votes: std::iter::once(0).collect(), // grant self vote
             established: false,
         });
@@ -212,9 +213,25 @@ where N: Network
             last_history: local_last_history_id,
         });
     }
-    
-    async fn handle_request_vote_reply(&mut self, reply: RequestVoteReply) {
-        
+
+    async fn handle_request_vote_reply(
+        &mut self,
+        sending_clock: Clock,
+        target: NodeId,
+        reply: RequestVoteReply,
+    ) -> Option<()> {
+        let leader = self.leader.as_mut()?;
+
+        if leader.clock != sending_clock {
+            return None;
+        }
+
+        if reply.granted {
+            leader.granted_votes.insert(target);
+        } else {
+            self.leader = None;
+            return None;
+        }
     }
 
     /// Handle an application write request per `DESIGN.md` §9.
