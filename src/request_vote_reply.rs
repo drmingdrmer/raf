@@ -1,5 +1,6 @@
 //! [`RequestVoteReply`] — response to [`crate::RequestVote`].
 
+use crate::Clock;
 use crate::hisotory_id::HistoryId;
 
 /// Response to a [`crate::RequestVote`] request.
@@ -19,7 +20,7 @@ pub struct RequestVoteReply {
     /// of. If `granted` is false because the candidate's
     /// `leader_index` was already occupied or was not higher than
     /// this value, the candidate uses this to skip ahead.
-    pub clock_len: u64,
+    pub clock_len: Clock,
 
     /// The responder's local [`AcceptedContent`]. Used by the
     /// candidate as the freshness comparator if the vote was

@@ -9,11 +9,8 @@ use tokio::sync::mpsc::unbounded_channel;
 use tokio::sync::oneshot;
 
 use crate::clock_storage::ClockArray;
-use crate::clock_storage::ClockChunk;
-use crate::clock_storage::ClockStorage;
 use crate::hisotory_id::HistoryId;
 use crate::history_storage::CmdArray;
-use crate::history_storage::HistoryStorage;
 use crate::leader_state::LeaderState;
 use crate::network::Network;
 use crate::request_vote::RequestVote;
@@ -134,30 +131,12 @@ where N: Network
             return;
         }
 
-        self.clock_storage.update(local_clock_len, &[req.clock]);
-        
-
-        // The reply's `last_leader_index` reports the post-decision
-        // state: when granted, the candidate's own identity is now
-        // the highest leader_index this node has stored; when
-        // rejected, the prior value is unchanged.
-        let last_leader_index = if granted {
-            // Storage failure here is unrecoverable for the Core —
-            // the durability story is broken, so bail loudly rather
-            // than silently degrade the grant into a reject.
-            self.history
-                .append(req.clock, &[req.clock])
-                .await
-                .expect("storage append failed during RequestVote grant");
-            req.clock
-        } else {
-            log.last_leader_index.unwrap_or(0)
-        };
+        let _len = self.clock_storage.update(local_clock_len, &[req.clock]);
 
         let _ = reply_tx.send(RequestVoteReply {
-            granted,
-            clock_len: last_leader_index,
-            last_history: log.accepted,
+            granted: true,
+            clock_len: local_clock_len,
+            last_history: local_last_history_id,
         });
     }
 

@@ -21,7 +21,7 @@ impl ClockArray {
         self.clocks.len() as u64
     }
 
-    pub fn update(&mut self, since: u64, clocks: &[Clock]) {
+    pub fn update(&mut self, since: u64, clocks: &[Clock]) -> u64 {
         while self.len() < since {
             self.clocks.push(self.len());
         }
@@ -31,6 +31,8 @@ impl ClockArray {
             self.clocks.resize(end as usize, 0);
         }
         self.clocks[since as usize..end as usize].copy_from_slice(clocks);
+
+        self.clocks.len() as u64
     }
 
     pub fn read(&self, range: Range<u64>) -> ClockChunk {
