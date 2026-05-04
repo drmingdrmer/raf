@@ -1,5 +1,6 @@
 //! Singleton event-loop core for a `raf` node.
 
+use std::collections::BTreeMap;
 use std::io;
 use std::sync::Arc;
 
@@ -12,6 +13,7 @@ use crate::Clock;
 use crate::Cmd;
 use crate::Membership;
 use crate::NodeId;
+use crate::ReplicationState;
 use crate::clock_storage::ClockArray;
 use crate::hisotory_id::HistoryId;
 use crate::history_storage::CmdArray;
@@ -240,10 +242,20 @@ where N: Network
     }
 
     async fn establish_leader(&mut self) {
-        let leader = 
-        self.leader.as_mut().unwrap().established = true;
-        
-        sel
+        let leader = self.leader.as_mut().unwrap();
+        leader.established = true;
+
+        let history_len = self.history.len();
+
+        for target in self.membership.node_ids().iter().cloned() {
+            if target == self.id {
+                continue;
+            }
+
+            let replication = ReplicationState::new(target, history_len);
+
+            leader.replications.insert(target, replication);
+        }
 
         let n = self.clock_storage.len() - self.history.len();
         // create a vec of Cmds of length n, with each Cmd being a No-op
@@ -253,7 +265,13 @@ where N: Network
         self.try_initialize_replication().await;
     }
 
-    async fn try_initialize_replication(&mut self) {}
+    async fn try_initialize_replication(&mut self) {
+        let leader = self.leader.as_mut().unwrap();
+
+        for replication in leader.replications.values_mut() {
+            if replication.
+        }
+    }
 
     /// Handle an application write request per `DESIGN.md` §9.
     ///

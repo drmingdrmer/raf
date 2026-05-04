@@ -6,7 +6,16 @@ pub struct ReplicationState {
     pub start: u64,
     pub end: u64,
 
-    pub history_id: HistoryId,
-    pub membership: Membership,
-    pub clock_array: ClockArray,
+    pub inflight: bool,
+}
+
+impl ReplicationState {
+    pub fn new(target: NodeId, end: u64) -> Self {
+        Self {
+            target,
+            start: 0,
+            end,
+            inflight: false,
+        }
+    }
 }
