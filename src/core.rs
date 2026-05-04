@@ -25,6 +25,7 @@ use crate::write_request::WriteRequest;
 /// `oneshot::Sender` — the caller (transport or application) owns
 /// the receiver and awaits the reply.
 pub(crate) enum Event {
+    Elect {},
     /// Inbound `RequestVote` from a peer; the Core decides the vote
     /// per `DESIGN.md` §8.3 and ships the reply back through
     /// `reply_tx`.
@@ -80,9 +81,12 @@ where N: Network
     /// Single-mailbox event loop. All inbound traffic — application
     /// commands, network requests, network responses — arrives here as
     /// an [`Event`] and is dispatched inline.
-    async fn run(mut self) {
+    async fn run(mut self) -> Result<(), io::Error> {
         while let Some(event) = self.mailbox.recv().await {
             match event {
+                Event::Elect {} => {
+                    self.elect().await?;
+                }
                 Event::RequestVote { req, reply_tx } => {
                     self.handle_request_vote(req, reply_tx).await;
                 }
@@ -91,6 +95,12 @@ where N: Network
                 }
             }
         }
+
+        Ok(())
+    }
+
+    async fn elect(&mut self) -> Result<(), io::Error> {
+        
     }
 
     /// Decide an inbound `RequestVote` per `DESIGN.md` §8.3.
