@@ -310,11 +310,30 @@ where N: Network
 
     async fn handle_append(&mut self, append: AppendRequest) -> Result<AppendReply, io::Error> {
         //
-        let my_clock = self.clock_storage.last().1;
-        if append.clock != my_clock {
-            
+        let (index, my_clock) = self.clock_storage.last();
+        if append.clock > my_clock {
+            self.clock_storage.update(append.clock, &[append.clock]);
+        } else if append.clock < my_clock {
+            return Ok(AppendReply {
+                clock: my_clock,
+                matched: None,
+                conflict: None,
+            });
+        } else {
+            // equal
+        }
+
+        let local = self.clock_storage.read_one(append.clock);
+        if append.payloads[0].0 != local {
+            return Ok(AppendReply {)
+                clock: my_clock,
+                matched: None,
+                conflict: Some(local),
+            });
             
         }
+
+        self.clock_storage.update(append.since);
     }
 
     /// Handle an application write request per `DESIGN.md` §9.

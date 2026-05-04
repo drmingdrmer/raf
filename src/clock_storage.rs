@@ -46,8 +46,8 @@ impl ClockArray {
         ClockChunk { len, entries: clocks }
     }
 
-    pub fn read_one(&self, index: Index) -> Option<Clock> {
-        self.clocks.get(index as usize).cloned()
+    pub fn read_one(&self, index: Index) -> Clock {
+        self.clocks.get(index as usize).unwrap().clone()
     }
 
     pub fn last(&self) -> (Index, Clock) {
