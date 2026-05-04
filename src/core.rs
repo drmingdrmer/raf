@@ -114,26 +114,28 @@ where N: Network
         let local_clock_len = self.clock_storage.len();
         let local_history_len = self.history.len();
         let local_last_history_clock = self.clock_storage.read_one(local_clock_len - 1).unwrap();
-        let local_last_history
+        let local_last_history_id = HistoryId::new(local_last_history_clock, local_history_len - 1);
 
         if req.clock < local_clock_len {
             let _ = reply_tx.send(RequestVoteReply {
                 granted: false,
                 clock_len: local_clock_len,
-                last_history: HistoryId::new(local_last_history_clock, local_history_len - 1),
+                last_history: local_last_history_id,
             });
             return;
         }
+
+        if req.last_history <= local_last_history_id {
+            let _ = reply_tx.send(RequestVoteReply {
+                granted: false,
+                clock_len: local_clock_len,
+                last_history: local_last_history_id,
+            });
+            return;
+        }
+
+        self.clock_storage.update(local_clock_len, &[req.clock]);
         
-        if req.last_history <= local_last_history_clock
-
-        // Empty range: only the metadata (len, accepted,
-        // last_leader_index) is needed for the decision.
-        let log = self.history.read(0..0).await.expect("storage read failed during RequestVote");
-
-        let position_unclaimed = req.clock >= log.len;
-        let fresh_enough = req.accepted >= log.accepted;
-        let granted = position_unclaimed && fresh_enough;
 
         // The reply's `last_leader_index` reports the post-decision
         // state: when granted, the candidate's own identity is now
