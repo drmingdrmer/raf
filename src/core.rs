@@ -8,6 +8,8 @@ use tokio::sync::mpsc::UnboundedSender;
 use tokio::sync::mpsc::unbounded_channel;
 use tokio::sync::oneshot;
 
+use crate::Membership;
+use crate::NodeId;
 use crate::clock_storage::ClockArray;
 use crate::hisotory_id::HistoryId;
 use crate::history_storage::CmdArray;
@@ -54,6 +56,8 @@ where N: Network
     /// tasks (see `DESIGN.md` §15.1.3).
     #[allow(dead_code)]
     network: Arc<N>,
+
+    id: NodeId,
 
     membership: Membership,
 
@@ -124,7 +128,35 @@ where N: Network
         Ok(())
     }
 
-    async fn spawn_request_vote_rpcs(&mut self, clock: u64) -> Result<(), io::Error> {}
+    async fn spawn_request_vote_rpcs(&mut self, clock: u64) -> Result<(), io::Error> {
+        for peer in self.membership.node_ids() {
+            if peer == &self.id {
+                continue;
+            }
+
+            let req = RequestVote {
+                clock,
+                last_history: HistoryId::new(clock, self.history.len()),
+            };
+            let network = Arc::clone(&self.network);
+            let reply_tx = self.mailbox.clone();
+            tokio::spawn(async move {
+                match network.request_vote(peer, req).await {
+                    Ok(reply) => {
+                        let _ = reply_tx.send(Event::RequestVote {
+                            req,
+                            reply_tx: oneshot::channel().0,
+                        });
+                    }
+                    Err(e) => {
+                        eprintln!("failed to send RequestVote to peer {}: {}", peer, e);
+                    }
+                }
+            });
+        }
+
+        Ok(())
+    }
 
     /// Decide an inbound `RequestVote` per `DESIGN.md` §8.3.
     ///
