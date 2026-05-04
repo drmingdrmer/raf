@@ -6,6 +6,7 @@
 //! the full design.
 
 mod accepted_content;
+mod append_request;
 mod array_chunk;
 mod clock;
 mod clock_storage;

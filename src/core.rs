@@ -269,7 +269,23 @@ where N: Network
         let leader = self.leader.as_mut().unwrap();
 
         for replication in leader.replications.values_mut() {
-            if replication.
+            if replication.inflight {
+                continue;
+            }
+
+            let start = (replication.start + replication.end) / 2;
+            let len = 64;
+            let net = self.network.clone();
+
+            let clocks = self.clock_storage.read(start..start + len);
+
+            let append_request = AppendRequest {
+
+            }
+
+            tokio::spawn(async move { net.append() });
+
+            replication.inflight = true;
         }
     }
 
