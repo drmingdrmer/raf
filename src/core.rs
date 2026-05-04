@@ -270,9 +270,12 @@ where N: Network
         let leader = self.leader.as_mut().unwrap();
 
         for replication in leader.replications.values_mut() {
-            if replication.inflight {
-                continue;
-            }
+            let permit = replication.inflight.try_acquire();
+
+            let permit = match permit {
+                Ok(permit) => permit,
+                Err(_) => continue, // already inflight; skip
+            };
 
             let start = (replication.start + replication.end) / 2;
             let len = 64;
@@ -293,6 +296,8 @@ where N: Network
             let append_request = AppendRequest { payloads };
 
             tokio::spawn(async move {
+                let _x = permit;
+
                 let reply = net.append(replication.target, append_request).await;
                 tx.send(Event::AppendReply {
                     target: replication.target,

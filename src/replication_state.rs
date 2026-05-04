@@ -1,3 +1,5 @@
+use tokio::sync::Semaphore;
+
 use crate::NodeId;
 
 pub struct ReplicationState {
@@ -6,7 +8,7 @@ pub struct ReplicationState {
     pub start: u64,
     pub end: u64,
 
-    pub inflight: bool,
+    pub inflight: Semaphore,
 }
 
 impl ReplicationState {
@@ -15,7 +17,7 @@ impl ReplicationState {
             target,
             start: 0,
             end,
-            inflight: false,
+            inflight: Semaphore::new(1),
         }
     }
 }
