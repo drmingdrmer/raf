@@ -325,15 +325,22 @@ where N: Network
 
         let local = self.clock_storage.read_one(append.clock);
         if append.payloads[0].0 != local {
-            return Ok(AppendReply {)
+            if append.since > 0 {
+                self.history.truncate(append.since - 1);
+            }
+
+            return Ok(AppendReply {
                 clock: my_clock,
                 matched: None,
-                conflict: Some(local),
+                conflict: Some(append.clock),
             });
-            
         }
 
-        self.clock_storage.update(append.since);
+        let clocks = append.payloads.iter().map(|(clock, _)| *clock).collect::<Vec<_>>();
+        let cmds = append.payloads.iter().map(|(_, cmd)| cmd.clone()).collect::<Vec<_>>();
+
+        self.clock_storage.update(append.since, &clocks);
+        self.history.append(cmds);
     }
 
     /// Handle an application write request per `DESIGN.md` §9.
