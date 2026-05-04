@@ -6,6 +6,7 @@
 //! the full design.
 
 mod accepted_content;
+mod append_reply;
 mod append_request;
 mod array_chunk;
 mod clock;
@@ -29,13 +30,14 @@ mod write_reply;
 mod write_request;
 
 pub use self::accepted_content::AcceptedContent;
+pub use self::append_reply::AppendReply;
+pub use self::append_request::AppendRequest;
 pub use self::array_chunk::ArrayChunk;
 pub use self::clock::Clock;
 pub use self::cmd::Cmd;
 pub use self::handle::Handle;
 pub use self::history_storage::HistoryStorage;
 pub use self::index::Index;
-pub use self::log_state::HistoryState;
 pub use self::membership::Membership;
 pub use self::network::InProcessNetwork;
 pub use self::network::Network;

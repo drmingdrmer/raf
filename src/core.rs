@@ -9,6 +9,7 @@ use tokio::sync::mpsc::UnboundedSender;
 use tokio::sync::mpsc::unbounded_channel;
 use tokio::sync::oneshot;
 
+use crate::AppendReply;
 use crate::Clock;
 use crate::Cmd;
 use crate::Membership;
@@ -307,8 +308,13 @@ where N: Network
         }
     }
 
-    async fn handle_append(&mut self, append: AppendRequest) {
+    async fn handle_append(&mut self, append: AppendRequest) -> Result<AppendReply, io::Error> {
         //
+        let my_clock = self.clock_storage.last().1;
+        if append.clock != my_clock {
+            
+            
+        }
     }
 
     /// Handle an application write request per `DESIGN.md` §9.

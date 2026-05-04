@@ -50,10 +50,10 @@ impl ClockArray {
         self.clocks.get(index as usize).cloned()
     }
 
-    pub fn last(&self) -> Option<(Index, Clock)> {
-        let last = self.clocks.last()?;
+    pub fn last(&self) -> (Index, Clock) {
+        let last = self.clocks.last().unwrap();
 
         let index = self.len() - 1;
-        Some((index, last.clone()))
+        (index, last.clone())
     }
 }
