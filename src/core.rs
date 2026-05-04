@@ -285,10 +285,10 @@ where N: Network
             let clocks = self.clock_storage.read(start..start + len);
             let histories = self.history.read(start..start + len);
 
-            let payloads = histories
+            let payloads = clocks
                 .entries
                 .into_iter()
-                .zip(clocks.entries.into_iter())
+                .zip(histories.entries.into_iter())
                 .enumerate()
                 .map(|(i, (cmd, clock))| ((start + i) as u64, cmd, clock))
                 .collect::<Vec<_>>();
@@ -304,9 +304,11 @@ where N: Network
                     reply,
                 })
             });
-
-            replication.inflight = true;
         }
+    }
+
+    async fn handle_append(&mut self, append: AppendRequest) {
+        //
     }
 
     /// Handle an application write request per `DESIGN.md` §9.
