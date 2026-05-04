@@ -14,6 +14,7 @@ use crate::Cmd;
 use crate::Membership;
 use crate::NodeId;
 use crate::ReplicationState;
+use crate::append_request::AppendRequest;
 use crate::clock_storage::ClockArray;
 use crate::hisotory_id::HistoryId;
 use crate::history_storage::CmdArray;
@@ -276,14 +277,28 @@ where N: Network
             let start = (replication.start + replication.end) / 2;
             let len = 64;
             let net = self.network.clone();
+            let tx = self.mailbox_tx.clone();
 
             let clocks = self.clock_storage.read(start..start + len);
+            let histories = self.history.read(start..start + len);
 
-            let append_request = AppendRequest {
+            let payloads = histories
+                .entries
+                .into_iter()
+                .zip(clocks.entries.into_iter())
+                .enumerate()
+                .map(|(i, (cmd, clock))| ((start + i) as u64, cmd, clock))
+                .collect::<Vec<_>>();
 
-            }
+            let append_request = AppendRequest { payloads };
 
-            tokio::spawn(async move { net.append() });
+            tokio::spawn(async move {
+                let reply = net.append(replication.target, append_request).await;
+                tx.send(Event::AppendReply {
+                    target: replication.target,
+                    reply,
+                })
+            });
 
             replication.inflight = true;
         }
