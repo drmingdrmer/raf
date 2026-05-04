@@ -100,7 +100,21 @@ where N: Network
     }
 
     async fn elect(&mut self) -> Result<(), io::Error> {
-        
+        self.do_elect().await
+    }
+
+    async fn do_elect(&mut self) -> Result<(), io::Error> {
+        let clock = self.clock_storage.len();
+
+        self.leader = Some(LeaderState {
+            leader_index: self.clock_storage.len(),
+            granted_votes: std::iter::once(0).collect(), // grant self vote
+            established: false,
+        });
+
+        self.clock_storage.update(clock, &[clock]);
+
+        Ok(())
     }
 
     /// Decide an inbound `RequestVote` per `DESIGN.md` §8.3.
@@ -140,6 +154,9 @@ where N: Network
             });
             return;
         }
+
+        // reset all leader or candidate
+        self.leader = None;
 
         let _len = self.clock_storage.update(local_clock_len, &[req.clock]);
 
