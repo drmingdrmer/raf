@@ -35,6 +35,9 @@ pub(crate) enum Event {
         req: RequestVote,
         reply_tx: oneshot::Sender<RequestVoteReply>,
     },
+    RequestVoteReply {
+        reply: RequestVoteReply,
+    },
     /// Application write request submitted via
     /// [`crate::Handle::write`] — handled per `DESIGN.md` §9.
     /// Only an established leader produces an `Ok` reply; everyone
@@ -66,6 +69,7 @@ where N: Network
     /// [`LeaderState`] and `DESIGN.md` §8.4.
     leader: Option<LeaderState>,
 
+    mailbox_tx: UnboundedSender<Event>,
     mailbox: UnboundedReceiver<Event>,
 }
 
@@ -138,17 +142,16 @@ where N: Network
 
             let req = RequestVote {
                 clock,
-                last_history: HistoryId::new(clock, self.history.len() - 1),
+                last_history: last_history_id,
             };
+
             let network = Arc::clone(&self.network);
-            let reply_tx = self.mailbox.clone();
+            let reply_tx = self.mailbox_tx.clone();
+
             tokio::spawn(async move {
                 match network.request_vote(peer, req).await {
                     Ok(reply) => {
-                        let _ = reply_tx.send(Event::RequestVote {
-                            req,
-                            reply_tx: oneshot::channel().0,
-                        });
+                        let _ = reply_tx.send(Event::RequestVoteReply { reply });
                     }
                     Err(e) => {
                         eprintln!("failed to send RequestVote to peer {}: {}", peer, e);
@@ -209,6 +212,10 @@ where N: Network
             last_history: local_last_history_id,
         });
     }
+    
+    async fn handle_request_vote_reply(&mut self, reply: RequestVoteReply) {
+        
+    }
 
     /// Handle an application write request per `DESIGN.md` §9.
     ///
@@ -242,15 +249,12 @@ where N: Network
         )));
     }
 
-    async fn last_history_id(&self) -> Option<HistoryId> {
+    async fn last_history_id(&self) -> HistoryId {
         let history_len = self.history.len();
-        if history_len == 0 {
-            return None;
-        }
 
         let index = history_len - 1;
 
         let last_history_clock = self.clock_storage.read_one(index).unwrap();
-        Some(HistoryId::new(last_history_clock, index))
+        HistoryId::new(last_history_clock, index)
     }
 }
