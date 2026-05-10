@@ -14,7 +14,6 @@ use crate::Membership;
 use crate::NodeId;
 use crate::ReplicationState;
 use crate::Storage;
-use crate::StorageExt;
 use crate::Term;
 use crate::append_reply::AppendReply;
 use crate::append_request::AppendRequest;
@@ -24,12 +23,13 @@ use crate::log_id::LogId;
 use crate::network::Network;
 use crate::request_vote::RequestVote;
 use crate::request_vote_reply::RequestVoteReply;
+use crate::storage_ext::StorageExt;
 use crate::write_reply::WriteReply;
 use crate::write_request::WriteRequest;
 
 pub(crate) struct Core<S, N>
 where
-    S: Storage + 'static,
+    S: Storage,
     N: Network,
 {
     storage: S,
@@ -54,7 +54,7 @@ where
 
 impl<S, N> Core<S, N>
 where
-    S: Storage + 'static,
+    S: Storage,
     N: Network,
 {
     /// Spawn the Core onto the current Tokio runtime; return a sender
@@ -555,7 +555,7 @@ mod tests {
     use crate::append_reply::AppendReply;
     use crate::append_request::AppendRequest;
     use crate::cmd_array::CmdArray;
-    use crate::storage::MemStorage;
+    use crate::mem_storage::MemStorage;
     use crate::term_array::TermArray;
 
     struct NoopNetwork;
