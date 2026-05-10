@@ -138,6 +138,7 @@ where N: Network
             established: false,
             replications: Default::default(),
             committed: 0,
+            pending_writes: Default::default(),
         });
 
         self.terms.update_terms(term, &[term]);
@@ -465,10 +466,11 @@ where N: Network
             return;
         };
 
-        while let Some((index, reply_tx)) = leader.pending_writes.front() {
-            if *index <= committed {
+        while let Some((index, _)) = leader.pending_writes.front() {
+            let index = *index;
+            if index <= committed {
                 let (_, reply_tx) = leader.pending_writes.pop_front().unwrap();
-                reply_tx.send(Ok(WriteReply { index: *index })).ok();
+                reply_tx.send(Ok(WriteReply { index })).ok();
             } else {
                 break;
             }
@@ -610,6 +612,7 @@ mod tests {
             established: true,
             replications: Default::default(),
             committed: 0,
+            pending_writes: Default::default(),
         });
 
         let leader = core.leader.as_mut().unwrap();
