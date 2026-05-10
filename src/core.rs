@@ -1,6 +1,5 @@
 //! Singleton event-loop core for a `raf` node.
 
-use std::collections::BTreeMap;
 use std::io;
 use std::sync::Arc;
 
@@ -146,7 +145,9 @@ where N: Network
                     sending_term,
                     target,
                     reply,
-                } => {}
+                } => {
+                    self.handle_append_reply(sending_term, target, reply).await;
+                }
                 Event::Write { req, reply_tx } => {
                     self.handle_write(req, reply_tx).await;
                 }
@@ -194,8 +195,8 @@ where N: Network
             let network = Arc::clone(&self.network);
             let reply_tx = self.mailbox_tx.clone();
 
-            let sending_term = clock.clone();
-            let target = peer.clone();
+            let sending_term = clock;
+            let target = *peer;
 
             tokio::spawn(async move {
                 match network.request_vote(target, req).await {
@@ -209,7 +210,7 @@ where N: Network
                             .ok();
                     }
                     Err(e) => {
-                        eprintln!("failed to send RequestVote to peer {}: {}", peer, e);
+                        eprintln!("failed to send RequestVote to peer {}: {}", target, e);
                     }
                 }
             });
@@ -234,10 +235,10 @@ where N: Network
     ///    is at least as up-to-date as we are (§6.3).
     async fn handle_request_vote(&mut self, req: RequestVote) -> Result<RequestVoteReply, io::Error> {
         let local_last = self.term_storage.last();
+
         let local_cmds_len = self.cmds.len();
-        let local_last_cmd_term = self.term_storage.read_one()
-        
-        let local_last_log_id = LogId::new(local_last.term, local_cmds_len - 1);
+        let local_last_cmd_term = self.term_storage.read_one(local_cmds_len - 1);
+        let local_last_log_id = LogId::new(local_last_cmd_term, local_cmds_len - 1);
 
         if req.term < local_last.term {
             return Ok(RequestVoteReply {
@@ -421,7 +422,7 @@ where N: Network
         Ok(AppendReply {
             term: last.term,
             matched: Some(LogId::new(
-                append.terms.last().unwrap().clone(),
+                *append.terms.last().unwrap(),
                 append.assume_matched_at + append.terms.len() as u64 - 1,
             )),
             conflict: None,

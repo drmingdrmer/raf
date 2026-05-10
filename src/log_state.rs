@@ -3,6 +3,5 @@
 
 use crate::ArrayChunk;
 use crate::Cmd;
-use crate::accepted_content::AcceptedContent;
 
 pub type CmdChunk = ArrayChunk<Cmd>;

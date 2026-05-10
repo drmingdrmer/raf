@@ -2,9 +2,12 @@
 
 use std::sync::Arc;
 
+use crate::Membership;
+use crate::NodeId;
+use crate::clock_storage::TermArray;
 use crate::core::Core;
 use crate::handle::Handle;
-use crate::history_storage::HistoryStorage;
+use crate::history_storage::CmdArray;
 use crate::network::Network;
 
 /// A running `raf` node.
@@ -24,12 +27,9 @@ impl Raf {
     /// wrapped in [`Arc`] internally so the Core can clone it cheaply
     /// when spawning outbound RPCs as parallel tasks
     /// (see `DESIGN.md` §15.1.3).
-    pub fn new<S, N>(storage: S, network: N) -> Self
-    where
-        S: HistoryStorage,
-        N: Network,
-    {
-        let mailbox_tx = Core::spawn(storage, Arc::new(network));
+    pub fn new<N>(id: NodeId, membership: Membership, terms: TermArray, cmds: CmdArray, network: N) -> Self
+    where N: Network {
+        let mailbox_tx = Core::spawn(id, membership, terms, cmds, Arc::new(network));
         Self {
             handle: Handle::new(mailbox_tx),
         }

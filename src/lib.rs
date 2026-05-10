@@ -35,7 +35,6 @@ pub use self::append_request::AppendRequest;
 pub use self::array_chunk::ArrayChunk;
 pub use self::cmd::Cmd;
 pub use self::handle::Handle;
-pub use self::history_storage::HistoryStorage;
 pub use self::index::LogIndex;
 pub use self::membership::Membership;
 pub use self::network::InProcessNetwork;

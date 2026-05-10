@@ -1,4 +1,3 @@
-use std::io;
 use std::ops::Range;
 
 use crate::ArrayChunk;
@@ -55,13 +54,13 @@ impl TermArray {
     }
 
     pub fn read_one(&self, index: LogIndex) -> Term {
-        self.clocks.get(index as usize).unwrap().clone()
+        *self.clocks.get(index as usize).unwrap()
     }
 
     pub fn last(&self) -> LogId {
         let last = self.clocks.last().unwrap();
 
         let index = self.len() - 1;
-        LogId::new(last.clone(), index)
+        LogId::new(*last, index)
     }
 }

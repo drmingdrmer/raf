@@ -59,7 +59,7 @@ impl Network for InProcessNetwork {
         ))
     }
 
-    async fn append(&self, target: u64, req: AppendRequest) -> io::Result<AppendReply> {
+    async fn append(&self, _target: u64, _req: AppendRequest) -> io::Result<AppendReply> {
         todo!()
     }
 }
