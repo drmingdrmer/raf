@@ -13,6 +13,7 @@ use crate::Cmd;
 use crate::Membership;
 use crate::NodeId;
 use crate::ReplicationState;
+use crate::Storage;
 use crate::Term;
 use crate::append_reply::AppendReply;
 use crate::append_request::AppendRequest;
@@ -27,12 +28,12 @@ use crate::term_array::TermArray;
 use crate::write_reply::WriteReply;
 use crate::write_request::WriteRequest;
 
-pub(crate) struct Core<N>
-where N: Network
+pub(crate) struct Core<S, N>
+where
+    S: Storage,
+    N: Network,
 {
-    terms: TermArray,
-
-    cmds: CmdArray,
+    storage: S,
 
     /// Held in `Arc` so outbound RPCs can be cloned into spawned
     /// tasks (see `DESIGN.md` §15.1.3).
@@ -52,14 +53,17 @@ where N: Network
     mailbox: UnboundedReceiver<Event>,
 }
 
-impl<N> Core<N>
-where N: Network
+impl<S, N> Core<S, N>
+where
+    S: Storage,
+    N: Network,
 {
     /// Spawn the Core onto the current Tokio runtime; return a sender
     /// to its mailbox.
     pub(crate) fn spawn(
         id: NodeId,
         membership: Membership,
+        storage: S,
         terms: TermArray,
         cmds: CmdArray,
         network: Arc<N>,
