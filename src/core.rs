@@ -56,7 +56,7 @@ pub(crate) enum Event {
     },
 
     /// Application write request submitted via
-    /// [`crate::Handle::write`] — handled per `DESIGN.md` §9.
+    /// [`crate::Raf::write`] — handled per `DESIGN.md` §9.
     /// Only an established leader produces an `Ok` reply; everyone
     /// else returns an `io::Error`.
     Write {
@@ -122,35 +122,42 @@ where N: Network
     /// an [`Event`] and is dispatched inline.
     async fn run(mut self) -> Result<(), io::Error> {
         while let Some(event) = self.mailbox.recv().await {
-            match event {
-                Event::Elect {} => {
-                    self.elect().await?;
-                }
-                Event::RequestVote { req, reply_tx } => {
-                    let reply = self.handle_request_vote(req).await?;
-                    reply_tx.send(reply).ok();
-                }
-                Event::RequestVoteReply {
-                    sending_term,
-                    target,
-                    reply,
-                } => {
-                    self.handle_request_vote_reply(sending_term, target, reply).await;
-                }
-                Event::Append { req, reply_tx } => {
-                    let reply = self.handle_append(req).await?;
-                    reply_tx.send(reply).ok();
-                }
-                Event::AppendReply {
-                    sending_term,
-                    target,
-                    reply,
-                } => {
-                    self.handle_append_reply(sending_term, target, reply).await;
-                }
-                Event::Write { req, reply_tx } => {
-                    self.handle_write(req, reply_tx).await;
-                }
+            self.handle_event(event).await?;
+            self.try_initialize_replication().await;
+        }
+
+        Ok(())
+    }
+
+    async fn handle_event(&mut self, event: Event) -> Result<(), io::Error> {
+        match event {
+            Event::Elect {} => {
+                self.elect().await?;
+            }
+            Event::RequestVote { req, reply_tx } => {
+                let reply = self.handle_request_vote(req).await?;
+                reply_tx.send(reply).ok();
+            }
+            Event::RequestVoteReply {
+                sending_term,
+                target,
+                reply,
+            } => {
+                self.handle_request_vote_reply(sending_term, target, reply).await;
+            }
+            Event::Append { req, reply_tx } => {
+                let reply = self.handle_append(req).await?;
+                reply_tx.send(reply).ok();
+            }
+            Event::AppendReply {
+                sending_term,
+                target,
+                reply,
+            } => {
+                self.handle_append_reply(sending_term, target, reply).await;
+            }
+            Event::Write { req, reply_tx } => {
+                self.handle_write(req, reply_tx).await;
             }
         }
 
@@ -316,12 +323,17 @@ where N: Network
         // Occupy all entries with no-op Cmd.
         let cmds = vec![Cmd::empty(); n as usize];
         self.cmds.append(cmds);
-
-        self.try_initialize_replication().await;
     }
 
     async fn try_initialize_replication(&mut self) {
-        let leader = self.leader.as_mut().unwrap();
+        let Some(leader) = self.leader.as_mut() else {
+            return;
+        };
+
+        if !leader.established {
+            return;
+        }
+
         let sending_term = leader.term;
 
         for replication in leader.replications.values_mut() {

@@ -27,13 +27,17 @@ pub trait Network: Send + Sync + 'static {
     /// Implementations own the send-and-await round-trip — the
     /// Core does not see the wire-level send / receive split. The
     /// `target` is an opaque node identifier (`u64`).
-    fn request_vote(&self, target: u64, req: RequestVote) -> impl Future<Output = io::Result<RequestVoteReply>> + Send;
+    fn request_vote(
+        &self,
+        target: u64,
+        req: RequestVote,
+    ) -> impl Future<Output = Result<RequestVoteReply, io::Error>> + Send;
 
     fn append(
         &self,
         target: u64,
         req: crate::append_request::AppendRequest,
-    ) -> impl Future<Output = io::Result<AppendReply>> + Send;
+    ) -> impl Future<Output = Result<AppendReply, io::Error>> + Send;
 }
 
 /// Default in-process [`Network`] implementation, intended for
@@ -53,13 +57,13 @@ impl InProcessNetwork {
 }
 
 impl Network for InProcessNetwork {
-    async fn request_vote(&self, _target: u64, _req: RequestVote) -> io::Result<RequestVoteReply> {
+    async fn request_vote(&self, _target: u64, _req: RequestVote) -> Result<RequestVoteReply, io::Error> {
         Err(io::Error::other(
             "InProcessNetwork::send_request_vote not yet implemented",
         ))
     }
 
-    async fn append(&self, _target: u64, _req: AppendRequest) -> io::Result<AppendReply> {
+    async fn append(&self, _target: u64, _req: AppendRequest) -> Result<AppendReply, io::Error> {
         todo!()
     }
 }

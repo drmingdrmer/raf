@@ -715,15 +715,15 @@ workspace sub-crates.
   committed index. Leader state is transient by design — it does
   not need to survive restart.
 
-#### 15.1.2 Handle (Control Handle)
+#### 15.1.2 Raf (Top-Level Handle)
 
-- Cheap to clone; the application clones it freely.
-- The only API surface for the application *and* the inbound
-  transport to talk to the Core. The application submits writes
-  through it (§9.1); the inbound transport forwards peer RPCs
-  through it.
-- Internally a thin wrapper that fans application/transport calls
-  into the Core's mailbox and awaits the inline reply.
+- Cheap to clone; the application and the inbound transport
+  clone it freely. Internally a thin wrapper around the Core's
+  mailbox sender, so cloning is the cost of an `Arc` bump.
+- The only API surface to the Core. The application submits
+  writes through it (§9.1); the inbound transport forwards peer
+  RPCs through it. Both paths fan into the Core's mailbox and
+  await the inline reply.
 
 #### 15.1.3 Network
 
@@ -751,12 +751,13 @@ supplied backends can persist these sequences.
 
 ### 15.3 Construction
 
-The top-level entry point spawns the Core task and exposes
-cheap-clone `Handle`s for the application and inbound transport.
-Construction takes the node's identity, the cluster membership,
-the in-memory term and cmd sequences, and a `Network`
-implementation. The exact constructor signature is the source of
-truth (see `src/raf.rs`).
+The top-level [`Raf`] constructor spawns the Core task and
+returns a cheap-clone handle that both the application and the
+inbound transport can hold and clone. Construction takes the
+node's identity, the cluster membership, the in-memory term and
+cmd sequences, and a `Network` implementation. The exact
+constructor signature is the source of truth (see
+`src/raf.rs`).
 
 ### 15.4 Differences From openraft
 
