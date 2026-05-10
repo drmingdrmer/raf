@@ -361,13 +361,13 @@ where N: Network
 
     async fn handle_append(&mut self, append: AppendRequest) -> Result<AppendReply, io::Error> {
         //
-        let (_index, my_term) = self.term_storage.last();
-        if append.term > my_term {
+        let last = self.term_storage.last();
+        if append.term > last.term {
             // TODO: save last-seen, instead of update storage. updating storage means accept a
             // request-vote. self.term_storage.update(append.term, &[append.term]);
-        } else if append.term < my_term {
+        } else if append.term < last.term {
             return Ok(AppendReply {
-                term: my_term,
+                term: last.term,
                 matched: None,
                 conflict: None,
             });
@@ -394,7 +394,7 @@ where N: Network
 
         let Some(last_matched) = last_matched else {
             return Ok(AppendReply {
-                term: my_term,
+                term: last.term,
                 matched: None,
                 conflict: Some(start),
             });
@@ -408,7 +408,7 @@ where N: Network
         self.cmds.append(append.cmds);
 
         Ok(AppendReply {
-            term: my_term,
+            term: last.term,
             matched: Some(LogId::new(
                 append.terms.last().unwrap().clone(),
                 append.assume_matched_at + append.terms.len() as u64 - 1,
