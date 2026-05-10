@@ -128,10 +128,8 @@ where N: Network
                     self.elect().await?;
                 }
                 Event::RequestVote { req, reply_tx } => {
-                    self.handle_request_vote(req, reply_tx).await;
-                }
-                Event::Write { req, reply_tx } => {
-                    self.handle_write(req, reply_tx).await;
+                    let reply = self.handle_request_vote(req).await?;
+                    reply_tx.send(reply).ok();
                 }
                 Event::RequestVoteReply {
                     sending_term,
@@ -139,6 +137,18 @@ where N: Network
                     reply,
                 } => {
                     self.handle_request_vote_reply(sending_term, target, reply).await;
+                }
+                Event::Append { req, reply_tx } => {
+                    let reply = self.handle_append(req).await?;
+                    reply_tx.send(reply).ok();
+                }
+                Event::AppendReply {
+                    sending_term,
+                    target,
+                    reply,
+                } => {}
+                Event::Write { req, reply_tx } => {
+                    self.handle_write(req, reply_tx).await;
                 }
             }
         }
@@ -172,7 +182,7 @@ where N: Network
                 continue;
             }
 
-            let last_history_id = self.last_history_id().await;
+            let last_history_id = self.last_log_id().await;
 
             let req = RequestVote {
                 clock,
@@ -211,28 +221,30 @@ where N: Network
     ///    last_leader_index" check redundant — see §6.4).
     /// 2. `req.accepted >= log.accepted` — lex-compared on `(leader_index, index)`; the candidate
     ///    is at least as up-to-date as we are (§6.3).
-    async fn handle_request_vote(&mut self, req: RequestVote, reply_tx: oneshot::Sender<RequestVoteReply>) {
+    async fn handle_request_vote(
+        &mut self,
+        req: RequestVote,
+        reply_tx: oneshot::Sender<RequestVoteReply>,
+    ) -> Result<RequestVoteReply, io::Error> {
         let local_clock_len = self.term_storage.len();
         let local_history_len = self.cmds.len();
         let local_last_history_clock = self.term_storage.read_one(local_clock_len - 1).unwrap();
         let local_last_history_id = LogId::new(local_last_history_clock, local_history_len - 1);
 
         if req.clock < local_clock_len {
-            let _ = reply_tx.send(RequestVoteReply {
+            return Ok(RequestVoteReply {
                 granted: false,
                 term_len: local_clock_len,
                 last_history: local_last_history_id,
             });
-            return;
         }
 
         if req.last_history <= local_last_history_id {
-            let _ = reply_tx.send(RequestVoteReply {
+            return Ok(RequestVoteReply {
                 granted: false,
                 term_len: local_clock_len,
                 last_history: local_last_history_id,
             });
-            return;
         }
 
         // reset all leader or candidate
@@ -240,11 +252,11 @@ where N: Network
 
         let _len = self.term_storage.update(local_clock_len, &[req.clock]);
 
-        let _ = reply_tx.send(RequestVoteReply {
+        Ok(RequestVoteReply {
             granted: true,
             term_len: local_clock_len,
             last_history: local_last_history_id,
-        });
+        })
     }
 
     async fn handle_request_vote_reply(
@@ -499,12 +511,12 @@ where N: Network
         )));
     }
 
-    async fn last_history_id(&self) -> LogId {
-        let history_len = self.cmds.len();
+    async fn last_log_id(&self) -> LogId {
+        let cmds_len = self.cmds.len();
 
-        let index = history_len - 1;
+        let index = cmds_len - 1;
 
-        let last_history_clock = self.term_storage.read_one(index).unwrap();
-        LogId::new(last_history_clock, index)
+        let last_term = self.term_storage.read_one(index);
+        LogId::new(last_term, index)
     }
 }
