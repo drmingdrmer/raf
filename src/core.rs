@@ -18,20 +18,18 @@ use crate::StorageExt;
 use crate::Term;
 use crate::append_reply::AppendReply;
 use crate::append_request::AppendRequest;
-use crate::cmd_array::CmdArray;
 use crate::event::Event;
 use crate::leader_state::LeaderState;
 use crate::log_id::LogId;
 use crate::network::Network;
 use crate::request_vote::RequestVote;
 use crate::request_vote_reply::RequestVoteReply;
-use crate::term_array::TermArray;
 use crate::write_reply::WriteReply;
 use crate::write_request::WriteRequest;
 
 pub(crate) struct Core<S, N>
 where
-    S: Storage,
+    S: Storage + 'static,
     N: Network,
 {
     storage: S,
@@ -56,7 +54,7 @@ where
 
 impl<S, N> Core<S, N>
 where
-    S: Storage,
+    S: Storage + 'static,
     N: Network,
 {
     /// Spawn the Core onto the current Tokio runtime; return a sender
@@ -557,6 +555,7 @@ mod tests {
     use crate::append_reply::AppendReply;
     use crate::append_request::AppendRequest;
     use crate::cmd_array::CmdArray;
+    use crate::storage::MemStorage;
     use crate::term_array::TermArray;
 
     struct NoopNetwork;
@@ -571,12 +570,11 @@ mod tests {
         }
     }
 
-    fn new_core(terms: Vec<Term>, cmds_len: usize, membership: Membership) -> Core<NoopNetwork> {
+    fn new_core(terms: Vec<Term>, cmds_len: usize, membership: Membership) -> Core<MemStorage, NoopNetwork> {
         let (mailbox_tx, mailbox) = unbounded_channel();
 
         Core {
-            terms: TermArray::new(terms),
-            cmds: CmdArray::new(vec![Cmd::empty(); cmds_len]),
+            storage: MemStorage::from_arrays(TermArray::new(terms), CmdArray::new(vec![Cmd::empty(); cmds_len])),
             network: Arc::new(NoopNetwork),
             id: 1,
             membership,
@@ -599,8 +597,8 @@ mod tests {
 
         let reply = core.handle_append(append).await.unwrap();
 
-        assert_eq!(core.terms.terms_len(), 4);
-        assert_eq!(core.cmds.cmds_len(), 4);
+        assert_eq!(core.storage.terms_len().await, 4);
+        assert_eq!(core.storage.cmds_len().await, 4);
         assert_eq!(reply.matched.unwrap(), LogId::new(1, 3));
 
         let append = AppendRequest {
@@ -612,8 +610,8 @@ mod tests {
 
         let reply = core.handle_append(append).await.unwrap();
 
-        assert_eq!(core.terms.terms_len(), 4);
-        assert_eq!(core.cmds.cmds_len(), 4);
+        assert_eq!(core.storage.terms_len().await, 4);
+        assert_eq!(core.storage.cmds_len().await, 4);
         assert_eq!(reply.matched.unwrap(), LogId::new(1, 3));
     }
 

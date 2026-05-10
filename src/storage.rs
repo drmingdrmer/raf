@@ -1,3 +1,4 @@
+use std::future::Future;
 use std::ops::Range;
 
 use crate::ArrayChunk;
@@ -21,20 +22,24 @@ pub trait StorageExt: Storage {
         async move { self.read_terms(range).await.len }
     }
 
-    async fn last_term(&self) -> Term {
-        let len = self.terms_len().await;
-        self.read_terms(len - 1..len).await.entries.last().cloned().unwrap_or(0)
+    fn last_term(&self) -> impl Future<Output = Term> + Send {
+        async move {
+            let len = self.terms_len().await;
+            self.read_terms(len - 1..len).await.entries.last().copied().unwrap_or(0)
+        }
     }
 
-    async fn read_one_term(&self, index: u64) -> Term {
-        self.read_terms(index..index + 1).await.entries[0]
+    fn read_one_term(&self, index: u64) -> impl Future<Output = Term> + Send {
+        async move { self.read_terms(index..index + 1).await.entries[0] }
     }
 
-    async fn fill_terms_gap(&mut self, since: u64) {
-        let len = self.terms_len().await;
-        let start = since.min(len);
-        for index in start..len {
-            self.update_terms(index, &[index as Term]).await;
+    fn fill_terms_gap(&mut self, since: u64) -> impl Future<Output = ()> + Send {
+        async move {
+            let len = self.terms_len().await;
+            let start = since.min(len);
+            for index in start..len {
+                self.update_terms(index, &[index as Term]).await;
+            }
         }
     }
 
@@ -57,6 +62,16 @@ impl MemStorage {
             terms: TermArray::new(vec![0]),
             cmds: CmdArray::new(vec![Cmd::empty()]),
         }
+    }
+
+    pub fn from_arrays(terms: TermArray, cmds: CmdArray) -> Self {
+        Self { terms, cmds }
+    }
+}
+
+impl Default for MemStorage {
+    fn default() -> Self {
+        Self::new()
     }
 }
 

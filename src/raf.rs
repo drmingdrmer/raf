@@ -10,15 +10,14 @@ use crate::AppendReply;
 use crate::AppendRequest;
 use crate::Membership;
 use crate::NodeId;
+use crate::Storage;
 use crate::WriteReply;
 use crate::WriteRequest;
-use crate::cmd_array::CmdArray;
 use crate::core::Core;
 use crate::event::Event;
 use crate::network::Network;
 use crate::request_vote::RequestVote;
 use crate::request_vote_reply::RequestVoteReply;
-use crate::term_array::TermArray;
 
 /// A running `raf` node.
 ///
@@ -39,9 +38,12 @@ impl Raf {
     /// is wrapped in [`Arc`] internally so the Core can clone it
     /// cheaply when spawning outbound RPCs as parallel tasks
     /// (see `DESIGN.md` §15.1.3).
-    pub fn new<N>(id: NodeId, membership: Membership, terms: TermArray, cmds: CmdArray, network: N) -> Self
-    where N: Network {
-        let mailbox_tx = Core::spawn(id, membership, terms, cmds, Arc::new(network));
+    pub fn new<S, N>(id: NodeId, membership: Membership, storage: S, network: N) -> Self
+    where
+        S: Storage + 'static,
+        N: Network,
+    {
+        let mailbox_tx = Core::spawn(id, membership, storage, Arc::new(network));
         Self { mailbox_tx }
     }
 
