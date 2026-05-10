@@ -9,6 +9,7 @@ use crate::core::Core;
 use crate::handle::Handle;
 use crate::history_storage::CmdArray;
 use crate::network::Network;
+use crate::request_vote::RequestVote;
 
 /// A running `raf` node.
 ///
@@ -38,5 +39,12 @@ impl Raf {
     /// Get a cheap-clone control handle for the application.
     pub fn handle(&self) -> Handle {
         self.handle.clone()
+    }
+
+    pub async fn handle_request_vote(
+        &self,
+        req: RequestVote,
+    ) -> std::io::Result<crate::request_vote_reply::RequestVoteReply> {
+        self.handle.request_vote(req).await
     }
 }

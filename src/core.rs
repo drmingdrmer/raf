@@ -166,7 +166,7 @@ where N: Network
 
         self.leader = Some(LeaderState {
             term: self.term_storage.len(),
-            granted_votes: std::iter::once(0).collect(), // grant self vote
+            granted_votes: std::iter::once(self.id).collect(), // grant self vote
             established: false,
             replications: Default::default(),
             committed: 0,
@@ -417,7 +417,11 @@ where N: Network
         }
 
         self.term_storage.update(append.assume_matched_at, &append.terms);
-        self.cmds.append(append.cmds);
+
+        let append_from = self.cmds.len().saturating_sub(append.assume_matched_at) as usize;
+        if append_from < append.cmds.len() {
+            self.cmds.append(append.cmds[append_from..].to_vec());
+        }
 
         Ok(AppendReply {
             term: last.term,
@@ -481,6 +485,8 @@ where N: Network
             if self.membership.is_quorum(&node_ids) {
                 committed = match_indices[0].0;
             }
+
+            match_indices.remove(0);
         }
 
         if committed > leader.committed {
