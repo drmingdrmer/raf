@@ -15,9 +15,9 @@ pub struct RequestVoteReply {
     /// Whether the responder granted the vote.
     pub granted: bool,
 
-    /// The responder's current term-array length. If the candidate
-    /// is behind, it can use this to skip to a newer slot.
-    pub term_len: LogIndex,
+    /// The responder's next writable term slot. If the candidate is
+    /// behind, it can use this to skip to a newer slot.
+    pub next_term_slot: LogIndex,
 
     /// The responder's local last log id. Used by the candidate as
     /// the freshness comparator if the vote was rejected on freshness

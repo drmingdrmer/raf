@@ -46,6 +46,7 @@ leader 之后追加的新日志项都使用同一个 `leader.term`。
 - `Core`：单线程 mailbox event loop。所有协议状态变更都在这里串行执行。
 - `Event`：Core 的内部事件，包括 `Elect`、`RequestVote`、`RequestVoteReply`、`Append`、`AppendReply`、`Write`。
 - `Network`：Core 用它向其它节点发送 outbound `RequestVote` 和 `Append`。
+- `InProcessNetwork`：进程内 `Network` 实现，用 `NodeId -> Raf` 路由表把 RPC 转发给目标节点。
 - `LeaderState`：候选人或 leader 的内存态，包括当前 term、已获投票集合、是否 established、每个 peer 的 replication state、已提交 index。
 - `ReplicationState`：leader 对单个 peer 的复制状态，包括 `matched`、`end` 和 per-peer inflight gate。
 
@@ -67,7 +68,7 @@ leader 之后追加的新日志项都使用同一个 `leader.term`。
 | 字段 | 含义 |
 |---|---|
 | `granted` | 是否投票给候选人。 |
-| `term_len` | responder 当前 `terms` 长度。候选人可用它判断自己是否落后。 |
+| `next_term_slot` | responder 的下一个可写 term slot。候选人可用它判断自己是否落后。 |
 | `last_log_id` | responder 的最后一条日志身份。候选人可用它判断日志 freshness 失败原因。 |
 
 ### Append
@@ -201,5 +202,4 @@ leader 根据所有 peer 的 `matched` 计算 commit index：
 - `TermArray::fill_gap()` 当前实现会继续 append，而不是填补 `[since, len)`；需要重新定义并修复。
 - `AppendRequest` 没验证 `terms.len() == cmds.len()`，空窗口会导致 `unwrap()` panic。
 - commit 计算没有把 leader 自身计入 quorum。
-- `InProcessNetwork` 仍是 stub。
 - durable storage、snapshot、membership change 都未实现。

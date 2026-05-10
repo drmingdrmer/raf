@@ -13,6 +13,7 @@ mod cmd_array;
 mod cmd_chunk;
 mod core;
 mod event;
+mod in_process_network;
 mod leader_state;
 mod log_id;
 mod log_index;
@@ -31,6 +32,7 @@ mod term_array;
 mod write_reply;
 mod write_request;
 
+pub use in_process_network::InProcessNetwork;
 pub use mem_storage::MemStorage;
 pub use storage_ext::StorageExt;
 
@@ -40,7 +42,6 @@ pub use self::array_chunk::ArrayChunk;
 pub use self::cmd::Cmd;
 pub use self::log_index::LogIndex;
 pub use self::membership::Membership;
-pub use self::network::InProcessNetwork;
 pub use self::network::Network;
 pub use self::node_id::NodeId;
 pub use self::raf::Raf;

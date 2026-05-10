@@ -203,7 +203,7 @@ where
     ///    stored or reserved.
     /// 2. `req.last_log_id > local.last_log_id` — the candidate's history is fresher than ours.
     async fn handle_request_vote(&mut self, req: RequestVote) -> Result<RequestVoteReply, io::Error> {
-        let local_term_len = self.storage.terms_len().await;
+        let local_next_term_slot = self.storage.terms_len().await;
         let local_last_term = self.storage.last_term().await;
 
         let local_cmds_len = self.storage.cmds_len().await;
@@ -213,7 +213,7 @@ where
         if req.term < local_last_term {
             return Ok(RequestVoteReply {
                 granted: false,
-                term_len: local_term_len,
+                next_term_slot: local_next_term_slot,
                 last_log_id: local_last_log_id,
             });
         }
@@ -221,7 +221,7 @@ where
         if req.last_log_id <= local_last_log_id {
             return Ok(RequestVoteReply {
                 granted: false,
-                term_len: local_term_len,
+                next_term_slot: local_next_term_slot,
                 last_log_id: local_last_log_id,
             });
         }
@@ -229,11 +229,11 @@ where
         // reset all leader or candidate
         self.leader = None;
 
-        let _len = self.storage.update_terms(local_term_len, &[req.term]).await;
+        let _len = self.storage.update_terms(local_next_term_slot, &[req.term]).await;
 
         Ok(RequestVoteReply {
             granted: true,
-            term_len: local_term_len,
+            next_term_slot: local_next_term_slot,
             last_log_id: local_last_log_id,
         })
     }
