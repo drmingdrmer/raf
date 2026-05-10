@@ -47,132 +47,75 @@ the same properties.*
 
 ## 6. State
 
-### 6.1 Log Model — Identity Without Payload
+### 6.1 Log Model — Parallel Arrays + LogId
 
-`raf` does **not** store log payloads. The log is a sequence of
-opaque 64-bit identifiers — the *log identity*. The application maps
-each identifier to whatever payload it represents and persists that
-mapping in its own storage.
+The log is a pair of parallel sequences indexed by the same
+log-index space (a `u64`):
 
-Conceptually:
+- a **term sequence** — at each index, the term of the leader
+  that owns that slot;
+- a **cmd sequence** — at each index, an opaque application
+  payload. `raf` does not interpret it.
+
+The pair `(term, index)` forms the **log identity** — the same
+`(term, log_index)` shape standard Raft uses to compare freshness
+and enforce log-matching. Conceptually:
 
 ```text
-log: Vec<u64>
+log[i] := (terms[i], cmds[i])
 ```
 
-Rationale: the job of a consensus algorithm is to make a *sequence
-of identities* durable and agreed-upon. Once identity persistence
-is guaranteed, payload storage can be delegated to any external
-system (database, object store, append-only file) without involving
-the consensus core. Decoupling identity from payload is the central
-simplification here — alongside dropping the term.
+Both arrays are addressed by the same index space and grow in
+lockstep — except for one transient state during candidacy
+(§6.3).
 
-### 6.2 Storage Surface
+### 6.2 Operations
 
-Storage owns two persistent values: the log itself, and the
-accepted-index cursor (§6.3). At a protocol level it supports three
-operations:
+**Term sequence.** Three operations matter at the protocol level:
+read one slot, read a contiguous window, and overwrite a
+contiguous window. The overwrite is used by both follower-side
+append handling (replacing the speculative tail with the leader's
+terms) and candidate-side voting (recording the new leader's term
+at the next slot).
 
-- **Write entries at a position.** A write at position `p`
-  overwrites whatever was at `p` before. Positions outside the
-  write range are untouched.
-- **Advance the accepted index.** Monotone non-decreasing — once
-  advanced, the cursor never regresses (§6.3).
-- **Read state on demand.** Storage is the single source of truth
-  for protocol state — `raf` intentionally keeps no in-memory
-  mirror. Every handler that needs `len`, the accepted index, the
-  last leader index, or any log entries reads them from storage at
-  the time of use. This trades performance for simplicity and is a
-  deliberate scoping choice for the experimental project.
+**Cmd sequence.** Three operations: append at the end, truncate
+the tail past a confirmed-matching point, and read a contiguous
+window. The cmd sequence is strictly grow-and-truncate — it does
+not support arbitrary-position writes. Divergent tails are
+repaired by truncating to the last matching index and then
+appending the leader's payloads.
 
-Two protocol-level properties matter:
+Persistence of these sequences is out of scope for the current
+draft; the project will revisit a durable storage layer once the
+protocol is fully fleshed out (see §15.1.4).
 
-**Writes do not truncate.** Writing at a position never removes
-entries at later positions. If old entries persist beyond the write
-boundary, they remain in the speculative tail. The protocol relies
-on the accepted-index cursor (§6.3), not on truncation, to
-demarcate trusted state.
+### 6.3 Steady State vs. Candidate State
 
-**Holes are allowed.** A write may start at a position past the
-highest previously-written one; the intervening positions become
-**holes** — empty slots that a later write may fill in.
+In steady state — at any non-candidate, non-establishing node —
+the two sequences have the same length: every stored payload has
+an associated term, and every term has an associated payload.
 
-Anything else — snapshots, payload retrieval, multi-range reads — is
-out of scope; the application owns it. (See §3 *Non-Goals*.)
+A candidate that has issued (or granted) a `RequestVote(term = T)`
+is briefly out of step. The term sequence is extended with one
+extra entry at index `cmds.len()` recording term `T`, reserving
+the slot for the new leader's first entry. The cmd sequence is
+**not** yet extended; the slot has no payload.
 
-### 6.3 Accepted Content
+This is the only legal source of `terms.len() > cmds.len()`. When
+the candidate becomes an established leader, the cmd sequence is
+padded out to match (with empty payloads at any reserved-but-not-
+yet-written slots) so steady state is restored (§8.5).
 
-Alongside the log, storage persists a single integer — the
-**accepted index** — that splits the log into two regions:
-
-- Positions `< accepted_index` are **decided**: entries here are
-  confirmed byte-for-byte identical to the leader's log and will
-  not be overwritten under normal protocol operation. The protocol
-  never advances the accepted index past a hole, so a valid prefix
-  is always contiguous and fully populated.
-- Positions `>= accepted_index` are **speculative**: entries here
-  have been written but not yet matched against the leader, so
-  they may still be overwritten if a divergent prefix is detected.
-
-The accepted index is monotone non-decreasing — once advanced, it
-never regresses.
-
-#### Accepted-content cursor
-
-Together with the leader_index recorded at log position
-`accepted_index - 1`, the accepted index forms the
-**accepted-content cursor** — the pair `(leader_index, index)`. The
-leader_index half is *not* persisted separately: it is derived from
-log content at startup.
-
-The cursor is the freshness comparator used in leader election: two
-cursors compare lexicographically by leader_index first, then index
-— the same shape Raft uses for `(lastTerm, lastLogIndex)`. See §7.1
-and §8.
-
-#### Validity of the persisted accepted index
-
-The persisted accepted index is **valid** — i.e., describes the
-storage as-is — only when `accepted_index >= len`. Equivalently:
-when there is no speculative tail.
-
-- `accepted_index < len`: storage holds a speculative tail left
-  behind by a previous leader. The persisted accepted index
-  describes a real prior state, but the trailing entries
-  (positions `[accepted_index..len)`) have not yet been confirmed
-  by the current leader.
-- `accepted_index >= len`: every stored entry has been accepted by
-  the current leader; the value is current and authoritative.
-
-The Core consults this rule at startup. A valid accepted index
-means the entire stored log is safe to use as-is. An invalid one
-means the speculative tail must be re-validated against the next
-leader before it can be relied on.
-
-### 6.4 Last Leader Index
-
-A node's **last leader index** is the value of the last non-hole
-entry in its log, or absent if the log has no written entries.
-
-Each entry is itself a leader_index — the identity of the leader
-that proposed the entry at that position (§6.1). The protocol
-invariant is that these values are **monotone non-decreasing along
-the log**: a leader only writes its own identity, and a leader's
-identity is the position past every earlier leader's writes the
-candidate has seen. So the value of the last non-hole entry is also
-the **maximum** leader_index ever stored — i.e. the highest vote
-this node has ever granted at any position.
-
-This value is not separately persisted; it is derived from log
-content. The Core uses it during leader election to interpret
-rejections (§8.3): a candidate whose `leader_index` is below the
-voter's last leader index is stale, regardless of whether its
-specific position is occupied.
+If a higher-term grant arrives before establishment, the term
+sequence's overwrite operation simply replaces the value at that
+reserved slot — no special bookkeeping is needed to invalidate the
+old reservation.
 
 ## 7. Messages / RPCs
 
-`raf`'s wire protocol is — for now — a single RPC pair, with more to
-come as the design fills in.
+`raf`'s wire protocol so far has two RPC pairs — `RequestVote` for
+leader election (§7.1) and `Append` for replication and matching
+(§7.2). More may be added as the design fills in.
 
 ### 7.1 RequestVote
 
@@ -181,26 +124,53 @@ Modeled on standard Raft's `RequestVote` RPC.
 
 | Field | Meaning |
 |---|---|
-| `leader_index` | The candidate's chosen leader identity — the next index past the end of its local log. |
-| `accepted` | The candidate's last known accepted-content cursor — the freshness comparator (see §6.3). |
-
-Each entry in the log is itself a leader_index (the identity of the
-leader that proposed the entry at that position), so
-`accepted.leader_index` is `log[accepted.index - 1]` — the producer
-of the candidate's last accepted entry.
+| `term` | The candidate's term — the slot it is running to fill (§8.1). |
+| `last_log_id` | The candidate's last log identity, `(term, index)` — the freshness comparator. |
 
 **Reply:**
 
 | Field | Meaning |
 |---|---|
 | `granted` | Whether the responder accepted the candidate's claim. |
-| `last_leader_index` | The responder's most-recently-seen leader_index. |
-| `accepted` | The responder's local accepted-content cursor. |
+| `term_len` | The responder's local term-sequence length — the smallest index past every term it has stored. The candidate uses this to skip ahead if it is behind. |
+| `last_history` | The responder's local last log identity. The candidate uses this as the freshness comparator if the rejection was on freshness grounds. |
 
-The reply always carries the responder's local state, so when the
-vote is rejected the candidate can determine which condition caused
-the rejection — an occupied `leader_index`, or a stale `accepted`
-cursor (per §8.3).
+The reply ships local state regardless of `granted`, so a rejected
+candidate can determine which condition fired and decide what to
+do next — fall back to follower with a higher term, or retry with
+a fresher log (per §8.3).
+
+### 7.2 Append
+
+Sent by an established leader to each peer to replicate log
+entries and discover the longest matching prefix in a single
+round-trip (§9.2).
+
+| Field | Meaning |
+|---|---|
+| `term` | The leader's term. |
+| `assume_matched_at` | The starting log index of the window the leader is shipping. |
+| `terms` | The terms at `[assume_matched_at, assume_matched_at + terms.len())`. |
+| `cmds` | The corresponding payloads, one per slot. |
+
+The leader picks `assume_matched_at` by **bisection** between the
+greatest log index known to match this peer and the smallest known
+not to (§9.2.2). The `terms` array carries enough per-slot
+identity for the follower to determine — slot by slot — exactly
+how far it agrees with the leader.
+
+**Reply:**
+
+| Field | Meaning |
+|---|---|
+| `term` | The follower's most-recently-seen term. The leader uses this to detect that it is stale and step down. |
+| `matched` | The greatest `LogId` at which the follower agrees with the leader, or `None` if the very first slot in the window did not match. |
+| `conflict` | If the very first slot did not match, the index at which the disagreement was first observed; otherwise `None`. |
+
+`matched` and `conflict` are mutually exclusive: a non-empty
+`matched` means at least one slot agreed and the leader can
+advance; a non-empty `conflict` means the leader's lower bound for
+matching is wrong and it must retry with a smaller starting index.
 
 ## 8. Leader Election
 
@@ -208,134 +178,143 @@ A node decides to become a candidate when it observes that no
 current leader is making progress (mechanism — timeout, heartbeat
 starvation, etc. — TBD).
 
-### 8.1 Choosing an Identity
+### 8.1 Choosing a Term
 
-A candidate's identity is `len`, the next index past the end of its
-local log. This index is what the candidate is "running for": if
-elected, it will write its first entry as leader at this position.
-Naming the identity by the position it claims removes the need for
-a separate term — the position itself orders leaders.
+A candidate's term is `terms.len()` — the next slot past the end
+of its term sequence. By writing its own term at index
+`terms.len()` *before* issuing the `RequestVote`, the candidate
+**reserves** that slot for itself: any later candidate observing
+this state sees a term sequence that has already grown past it
+and must claim a higher term to win freshness.
 
-Each subsequent entry the leader proposes (at positions `len`,
-`len+1`, …) carries this same `leader_index` as its log value.
-Entries at positions below `leader_index` are inherited from
-previous leaders and remain unchanged unless they need to be
-overwritten because they diverge from a more-up-to-date log
-(§6.2).
+Each subsequent log entry the leader proposes (at indices
+`terms.len()`, `terms.len() + 1`, …) carries this same term in
+its term-sequence slot. Entries at indices below the candidate's
+term are inherited from previous leaders and are not overwritten
+unless they diverge from a more-up-to-date log (§9.2).
+
+This is the standard Raft idea (the term is monotonically
+increasing across leaders), but here the term and the log-index
+space are coupled through the term sequence. The term is, in
+effect, the index of the candidate's first prospective entry as
+leader.
 
 ### 8.2 Issuing the Vote Request
 
-The candidate sends a [`RequestVote`] (§7.1) to each other node,
-carrying:
-
-- its candidate identity (`leader_index = len`);
-- its last accepted content
-  (`accepted_index`, `accepted_leader_index`).
+The candidate sends a `RequestVote` (§7.1) to each other node,
+carrying its term and its last log identity. It counts its own
+vote in the initial tally — the candidate trivially satisfies the
+grant rules for itself.
 
 ### 8.3 Voter Decision and Response
 
-A voter receiving a [`RequestVote`] (§7.1) grants the vote **if and
-only if both** conditions hold:
+A voter receiving a `RequestVote` grants the vote **if and only if
+both** conditions hold:
 
-1. **Position unclaimed.** `req.leader_index >= local.len`. The
-   candidate's claimed identity is past every position the voter has
-   ever written.
-2. **Freshness.** `req.accepted >= local.accepted`, comparing the
-   accepted-content cursor lexicographically by `leader_index`, then
-   `index` (§6.3). The candidate's last accepted content is at least
-   as up-to-date as the voter's own.
+1. **Term not behind.** `req.term >= local.last_term`, where
+   `local.last_term` is the term recorded at the last index of the
+   voter's term sequence — i.e. the highest term the voter has
+   stored or reserved.
+2. **Log freshness.** `req.last_log_id > local.last_log_id`,
+   comparing lexicographically `(term, index)`. The candidate's
+   last log identity is strictly newer than the voter's own.
 
-Note there is no separate "higher than last granted leader_index"
-check, even though that is what the rule semantically guarantees.
-By the protocol invariant from §6.4 — every entry's value (a
-leader_index) is at most its own position — `local.last_leader_index`
-is always `< local.len`. So `req.leader_index >= local.len`
-*automatically* implies `req.leader_index > local.last_leader_index`.
-One condition does the work of two.
+Both must hold. The freshness check is strict (`>`, not `>=`),
+which forces simultaneous candidates with identical logs to
+distinguish themselves by term.
 
 #### On grant
 
-- **Persist first.** Call `storage.append(leader_index,
-  &[leader_index])` to durably write the position-as-identity entry
-  before updating in-memory state. If `append` fails, the durability
-  story is broken — the voter bails loudly (panics) rather than
-  silently degrading the grant.
-- **Then update in memory.** Extend the log to length
-  `leader_index + 1` (filling any intervening positions with holes),
-  set `log[leader_index] = Some(leader_index)`, and set
-  `last_leader_index = Some(leader_index)`.
+The voter:
+
+- Drops any in-memory leader state — granting is incompatible
+  with continued candidacy or leadership on a different term
+  (§15.1.1).
+- Overwrites the term sequence at index `local.last_index + 1`
+  with `req.term`, reserving that slot for the new leader.
+
+The cmd sequence is **not** extended; the reservation is term-
+only. The payload arrives later via `Append` (§7.2), and at
+establishment the candidate pads any reserved-but-unwritten slot
+with an empty payload (§8.5).
 
 #### Response
 
-The reply is a [`RequestVoteReply`] (§7.1). It always carries:
-
-- `granted` — the decision.
-- `last_leader_index` — the voter's local last_leader_index (or `0`
-  if the log is empty).
-- `accepted` — the voter's local accepted-content cursor.
-
-The reply ships local state regardless of `granted`, so a rejected
-candidate can tell *which* condition fired and decide what to do
-next: a stale `accepted` means catch up before retrying; an
-under-`len` `leader_index` means skip ahead to a higher identity.
+The reply (§7.1) ships the voter's local state regardless of
+`granted`, so a rejected candidate can read off which condition
+fired: a `term_len` higher than the candidate's term means the
+candidate is behind; a `last_history` greater-or-equal to the
+candidate's `last_log_id` means the candidate's log is stale.
 
 ### 8.4 Tallying Votes and Establishing Leadership
 
-A node that has issued a `RequestVote` for its own candidacy holds
-**leader state** in memory until it either becomes an established
-leader, steps down, or restarts. Followers carry no leader state.
+A node that has issued a `RequestVote` for its own candidacy
+holds **leader state** in memory until it either becomes an
+established leader, steps down, or restarts. Followers carry no
+leader state.
 
-Leader state holds three things:
+Leader state holds, at minimum:
 
-- The candidate's chosen `leader_index` — its identity for this
-  election.
-- The running set of granted votes — the node IDs (including this
-  node itself) that have granted votes for `leader_index`.
-- An `established` flag.
-
-The candidate counts its own vote in the initial tally. By §8.3
-the candidate trivially satisfies the grant rules for itself: its
-`leader_index` equals its own `len`, and its `accepted` cursor is
-its own current value.
+- the candidate's term;
+- the running set of granted votes (including this node itself);
+- an `established` flag;
+- per-peer replication state, populated at establishment (§9.2);
+- the committed log index, advanced as quorum-matches arrive.
 
 The candidate becomes an **established leader** when the granted
 set reaches a quorum of the cluster. Establishment flips the flag
-once and never reverses within the same leader state.
+once and never reverses within the same leader-state instance.
 
-Leader state is *transient* (in-memory only — see §15.1.1) and
-distinct from the persistent log state owned by `Storage`. The
-in-memory exception is deliberate: election outcomes don't need
-to survive a crash — a restarted node simply re-runs the
-election.
+Leader state is transient (in-memory only — see §15.1.1) and
+distinct from the log itself. The in-memory exception is
+deliberate: election outcomes don't need to survive a crash — a
+restarted node simply re-runs the election.
 
-#### Establishment is unique per `leader_index`
+#### Establishment is unique per term
 
-At most one candidate can ever become the established leader for
-any given `leader_index`. The argument falls out of §8.3 directly,
-without needing a separate tie-breaker:
+At most one candidate becomes the established leader for any given
+term. The argument is the standard Raft one:
 
-- A successful grant of `RequestVote(leader_index = L)` calls
-  `append(L, &[L])`, which advances the voter's `len` to `L + 1`.
-- Any subsequent `RequestVote(leader_index = L)` from any
-  candidate then fails rule 1 (`L < L + 1 = local.len`) and is
+- A voter that grants `RequestVote(term = T)` overwrites its term
+  sequence at the next slot to record `T`. Its own
+  `last_log_id` advances to `(T, slot)`.
+- Any *subsequent* `RequestVote(term = T)` from a different
+  candidate is then judged against this advanced state. The
+  freshness check (§8.3.2) is strict, so the second candidate
+  must offer a *newer* `last_log_id` than `(T, slot)` — which
+  cannot happen at term `T` itself, since no one has produced an
+  entry past `slot` at term `T`. The second candidate is
   rejected.
-- So at any fixed `leader_index = L`, each voter grants **at most
-  one** candidate. The grant sets across competing candidates are
-  disjoint by construction.
-- Two candidates at the same `leader_index` would each need a
-  quorum-sized grant set. Disjoint grant sets together exceed the
-  cluster size only if their sum exceeds `N` — impossible, since
-  no voter is counted twice.
+- Even if two candidates with identical `last_log_id` race for
+  the same term, each voter's grant is exclusive — its grant set
+  contains the first candidate it accepted, not the second. Two
+  disjoint grant sets cannot both reach quorum in a cluster of
+  size N.
 
-This is the leader-uniqueness piece of the safety argument
-(see §10). Standard Raft uses the term as the discriminator that
-guarantees uniqueness across simultaneous candidacies; in `raf`,
-the position-as-identity rule does the same work — once a
-position is filled, that election is over.
+Term reuse, by definition, does not occur: a candidate can claim
+a term only by extending its own term sequence to that index, and
+once an entry is recorded at that index by any candidate the next
+candidate's `terms.len()` is at least one larger.
 
 Only an established leader may serve application writes (§9). A
 candidate still gathering votes refuses writes; so does any
 follower.
+
+### 8.5 Establishment Side-Effects
+
+When a candidate flips to **established** for term T, the leader:
+
+- Initializes per-peer replication state — `matched`, `end`, and
+  an inflight bound — for each member of the cluster (§9.2.1).
+- **Fills any term-sequence gap** between `cmds.len()` and
+  `terms.len()` with no-op term values. (A gap arises because the
+  candidate has reserved a slot via the term sequence but not yet
+  appended a cmd. The leader fills the gap so subsequent writes
+  start from a clean steady state.)
+- **Pads the cmd sequence** with empty payloads up to
+  `terms.len()`, restoring the steady-state invariant
+  `cmds.len() == terms.len()`.
+- Initiates the first round of `Append` RPCs (§9.2).
 
 ## 9. Log Replication
 
@@ -343,7 +322,7 @@ follower.
 
 The application submits writes to a node via the control handle.
 On the leader, the call returns when the entry has been committed
-by quorum and carries the committed log position. On any other
+by quorum and carries the committed log index. On any other
 node — follower, or candidate still gathering votes — the call
 returns an error indicating that this node is not the leader.
 
@@ -363,12 +342,124 @@ before accepting writes.
 
 ### 9.2 Leader-Side Replication
 
-*TBD — how the leader appends, replicates, and commits.*
+The leader runs a **bisection-based** match-and-replicate loop per
+peer: each `Append` RPC simultaneously narrows the leader's
+estimate of where the peer's log diverges *and* ships the entries
+in that window. There is no separate "find the matching index"
+phase — discovery and replication share the same round-trip.
+
+#### 9.2.1 Per-peer state
+
+For each peer the leader tracks, in memory:
+
+- **`matched`** — the greatest log index known to match this
+  peer's log. Lower bound on the matching point. Starts at `0` at
+  establishment and advances as positive replies arrive.
+- **`end`** — the smallest index known *not* to match. Upper
+  bound. Initialized at establishment to the leader's current
+  `cmds.len()` (the optimistic assumption that the peer's log
+  matches all the way through), and narrowed on each conflict
+  reply.
+- **`inflight`** — a single-permit gate. While an `Append` is
+  outstanding to a peer, no second one is dispatched. The gate
+  bounds parallelism per peer to one in-flight RPC.
+
+#### 9.2.2 The Append window
+
+The leader picks each `Append`'s starting index by bisection
+between the current bounds:
+
+```text
+start = (matched + end) / 2
+```
+
+It then ships a fixed-size window — currently 64 slots — of
+`(terms, cmds)` starting at `start`. The same RPC is therefore
+both a probe (does the peer match at `start` … and if so, how
+much further?) and a replication payload (here are the entries
+to copy if you don't have them).
+
+#### 9.2.3 Follower-side handling
+
+A follower receiving an `Append`:
+
+1. **Term check.** If `req.term < local.last_term`, reply with
+   `matched = None`, `conflict = None`, and the local term — the
+   leader is stale. (`req.term > local.last_term` is currently
+   noted for future use; the slot reservation done by `RequestVote`
+   already advanced the local term in normal operation.)
+2. **Slot-by-slot match.** Walk the local term sequence against
+   the request's `terms`, starting at `assume_matched_at`, and
+   find the longest contiguous prefix where they agree.
+   - If no slot agrees: reply `matched = None`,
+     `conflict = Some(assume_matched_at)`. The leader's lower
+     bound is wrong — the peer disagrees from the very first slot
+     in the window.
+   - If at least one slot agrees: truncate the local cmd sequence
+     to drop any divergent suffix past the last matched slot,
+     overwrite the term sequence with the request's `terms` over
+     the window, and append the request's `cmds`. Reply
+     `matched = Some((last_matched_term, last_matched_index))`.
+
+The truncate-then-overwrite step is what enforces log-matching:
+any entry past the matched boundary that disagrees with the
+leader is discarded.
+
+#### 9.2.4 Leader-side handling of reply
+
+On reply:
+
+- If `reply.term > leader.term`, the leader is stale; it clears
+  its leader state and steps down.
+- If `reply.matched` is set, the leader advances
+  `replication.matched` for that peer and tries to advance the
+  commit index (§9.2.5).
+- If `reply.conflict` is set, the leader narrows
+  `replication.end` to the conflict index. The next `Append` will
+  probe a smaller starting index.
+
+Either way, the inflight gate is released and the next round can
+fire.
+
+#### 9.2.5 Commit
+
+A log index *I* is committed when a quorum of peers have
+`matched >= I`, **and** the entry at *I* belongs to the leader's
+own term. The own-term restriction is the standard Raft commit
+rule: a leader may commit prior-term entries only by committing
+one of its own that follows them — see §10.
+
+The leader stores the committed index in its in-memory leader
+state and reports it back to the application as the reply to a
+successful `Write`.
 
 ## 10. Safety Argument
 
-*To be described — how leader uniqueness and log-matching are preserved
-without a term.*
+The current draft retains the term as an explicit value (the
+project name notwithstanding — see §2). The safety argument
+therefore reduces to the standard Raft proof, instantiated for
+this design's term-as-slot-index choice:
+
+- **Leader uniqueness per term** (§8.4). Each voter grants at
+  most one `RequestVote` per term: granting reserves the term's
+  slot in the term sequence and advances the voter's
+  `last_log_id` to that slot, after which a second candidate at
+  the same term cannot pass the strict freshness check. Two
+  disjoint quorums cannot both reach majority.
+- **Log matching** (§9.2). Followers truncate-and-overwrite any
+  divergent tail on `Append`. The per-slot `(term, index)`
+  identity lets the leader and follower compare slot-for-slot, so
+  any agreement on slot *i* implies agreement on `[0..i]`.
+- **Commit safety** (§9.2.5). An entry is committed only when a
+  quorum has matched it *and* the entry is from the leader's own
+  term. Older-term entries are committed transitively, by
+  committing a newer-term entry that follows them.
+
+The "no term" thesis remains aspirational: keeping the term as an
+internal mechanism while exposing only `(term, index)` log
+identities to the application is the current state. A future
+revision may eliminate the term once an alternative ordering is
+proven to carry the same invariants.
 
 ## 11. Membership Changes
 
