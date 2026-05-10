@@ -1,5 +1,6 @@
 //! Singleton event-loop core for a `raf` node.
 
+use std::collections::BTreeMap;
 use std::io;
 use std::sync::Arc;
 
@@ -632,6 +633,12 @@ mod tests {
         });
 
         let leader = core.leader.as_mut().unwrap();
+        leader.replications.insert(1, ReplicationState {
+            target: 1,
+            matched: 12,
+            end: 13,
+            inflight: Arc::new(tokio::sync::Semaphore::new(1)),
+        });
         leader.replications.insert(2, ReplicationState {
             target: 2,
             matched: 10,
@@ -653,6 +660,6 @@ mod tests {
 
         core.try_update_committed().await;
 
-        assert_eq!(core.leader.as_ref().unwrap().committed, 10);
+        assert_eq!(core.leader.as_ref().unwrap().committed, 12);
     }
 }
