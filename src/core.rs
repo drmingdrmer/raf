@@ -455,6 +455,23 @@ where N: Network
 
         if committed > leader.committed {
             leader.committed = committed;
+
+            self.respond_write_replies(committed).await;
+        }
+    }
+
+    async fn respond_write_replies(&mut self, committed: u64) {
+        let Some(leader) = self.leader.as_mut() else {
+            return;
+        };
+
+        while let Some((index, reply_tx)) = leader.pending_writes.front() {
+            if *index <= committed {
+                let (_, reply_tx) = leader.pending_writes.pop_front().unwrap();
+                reply_tx.send(Ok(WriteReply { index: *index })).ok();
+            } else {
+                break;
+            }
         }
     }
 
@@ -495,10 +512,11 @@ where N: Network
             reply_tx.send(Err(io::Error::other("not a leader; cannot handle write requests"))).ok();
             return;
         };
-        
-        
 
-        todo!()
+        self.terms.update_terms(self.cmds.cmds_len(), &[leader.term]);
+        self.cmds.append_cmds(vec![Cmd::empty()]);
+
+        leader.pending_writes.push_back((self.cmds.cmds_len() - 1, reply_tx));
     }
 
     async fn last_log_id(&self) -> LogId {

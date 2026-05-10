@@ -9,6 +9,7 @@
 use std::collections::BTreeMap;
 use std::collections::HashSet;
 use std::collections::VecDeque;
+use std::io;
 
 use tokio::sync::oneshot;
 
@@ -45,5 +46,5 @@ pub(crate) struct LeaderState {
 
     pub committed: u64,
 
-    pub pending_writes: VecDeque<(LogIndex, oneshot::Sender<WriteReply>)>,
+    pub pending_writes: VecDeque<(LogIndex, oneshot::Sender<Result<WriteReply, io::Error>>)>,
 }
