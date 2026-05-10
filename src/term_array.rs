@@ -17,20 +17,20 @@ impl TermArray {
         Self { terms }
     }
 
-    pub fn len(&self) -> u64 {
+    pub fn terms_len(&self) -> u64 {
         self.terms.len() as u64
     }
 
     // fill term `index` for entry `index` for `[since, len)`
-    pub fn fill_gap(&mut self, since: u64) {
-        for i in since..self.len() {
+    pub fn fill_terms_gap(&mut self, since: u64) {
+        for i in since..self.terms_len() {
             self.terms.push(i);
         }
     }
 
-    pub fn update(&mut self, since: u64, terms: &[Term]) -> u64 {
-        while self.len() < since {
-            self.terms.push(self.len());
+    pub fn update_terms(&mut self, since: u64, terms: &[Term]) -> u64 {
+        while self.terms_len() < since {
+            self.terms.push(self.terms_len());
         }
 
         let end = since + terms.len() as u64;
@@ -42,8 +42,8 @@ impl TermArray {
         self.terms.len() as u64
     }
 
-    pub fn read(&self, range: Range<u64>) -> TermChunk {
-        let len = self.len();
+    pub fn read_terms(&self, range: Range<u64>) -> TermChunk {
+        let len = self.terms_len();
         let terms = if range.start < len {
             let end = range.end.min(len);
             self.terms[range.start as usize..end as usize].to_vec()
@@ -53,14 +53,14 @@ impl TermArray {
         TermChunk { len, entries: terms }
     }
 
-    pub fn read_one(&self, index: LogIndex) -> Term {
+    pub fn read_one_term(&self, index: LogIndex) -> Term {
         *self.terms.get(index as usize).unwrap()
     }
 
-    pub fn last(&self) -> LogId {
+    pub fn last_term(&self) -> LogId {
         let last = self.terms.last().unwrap();
 
-        let index = self.len() - 1;
+        let index = self.terms_len() - 1;
         LogId::new(*last, index)
     }
 }

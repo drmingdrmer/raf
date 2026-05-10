@@ -130,17 +130,17 @@ where N: Network
     }
 
     async fn do_elect(&mut self) -> Result<(), io::Error> {
-        let term = self.terms.len();
+        let term = self.terms.terms_len();
 
         self.leader = Some(LeaderState {
-            term: self.terms.len(),
+            term: self.terms.terms_len(),
             granted_votes: std::iter::once(self.id).collect(), // grant self vote
             established: false,
             replications: Default::default(),
             committed: 0,
         });
 
-        self.terms.update(term, &[term]);
+        self.terms.update_terms(term, &[term]);
 
         self.spawn_request_vote_rpcs(term).await?;
 
@@ -155,10 +155,7 @@ where N: Network
 
             let last_log_id = self.last_log_id().await;
 
-            let req = RequestVote {
-                term,
-                last_log_id,
-            };
+            let req = RequestVote { term, last_log_id };
 
             let network = Arc::clone(&self.network);
             let reply_tx = self.mailbox_tx.clone();
@@ -196,16 +193,17 @@ where N: Network
     ///    stored or reserved.
     /// 2. `req.last_log_id > local.last_log_id` — the candidate's history is fresher than ours.
     async fn handle_request_vote(&mut self, req: RequestVote) -> Result<RequestVoteReply, io::Error> {
-        let local_last = self.terms.last();
+        let local_term_len = self.terms.terms_len();
+        let local_last = self.terms.last_term();
 
         let local_cmds_len = self.cmds.cmds_len();
-        let local_last_cmd_term = self.terms.read_one(local_cmds_len - 1);
+        let local_last_cmd_term = self.terms.read_one_term(local_cmds_len - 1);
         let local_last_log_id = LogId::new(local_last_cmd_term, local_cmds_len - 1);
 
         if req.term < local_last.term {
             return Ok(RequestVoteReply {
                 granted: false,
-                term_len: local_last.index + 1,
+                term_len: local_term_len,
                 last_log_id: local_last_log_id,
             });
         }
@@ -213,7 +211,7 @@ where N: Network
         if req.last_log_id <= local_last_log_id {
             return Ok(RequestVoteReply {
                 granted: false,
-                term_len: local_last.index + 1,
+                term_len: local_term_len,
                 last_log_id: local_last_log_id,
             });
         }
@@ -221,11 +219,11 @@ where N: Network
         // reset all leader or candidate
         self.leader = None;
 
-        let _len = self.terms.update(local_last.index + 1, &[req.term]);
+        let _len = self.terms.update_terms(local_term_len, &[req.term]);
 
         Ok(RequestVoteReply {
             granted: true,
-            term_len: local_last.index + 1,
+            term_len: local_term_len,
             last_log_id: local_last_log_id,
         })
     }
@@ -272,9 +270,9 @@ where N: Network
         }
 
         let cmds_len = self.cmds.cmds_len();
-        let n = self.terms.len() - cmds_len;
+        let n = self.terms.terms_len() - cmds_len;
 
-        self.terms.fill_gap(cmds_len);
+        self.terms.fill_terms_gap(cmds_len);
 
         // Occupy all entries with no-op Cmd.
         let cmds = vec![Cmd::empty(); n as usize];
@@ -308,7 +306,7 @@ where N: Network
             // TODO: len should not exceed cmds.len()
 
             // includes the last matched, will be used in the role of `prev`
-            let terms = self.terms.read(start..start + len).entries;
+            let terms = self.terms.read_terms(start..start + len).entries;
             let cmds = self.cmds.read_cmds(start..start + len).entries;
 
             let append_request = AppendRequest {
@@ -339,8 +337,7 @@ where N: Network
     }
 
     async fn handle_append(&mut self, append: AppendRequest) -> Result<AppendReply, io::Error> {
-        //
-        let last = self.terms.last();
+        let last = self.terms.last_term();
         if append.term > last.term {
             // TODO: save last-seen, instead of updating terms. Updating terms means accepting a
             // RequestVote.
@@ -360,7 +357,7 @@ where N: Network
 
         // find the matches
 
-        let local_terms = self.terms.read(start..end).entries;
+        let local_terms = self.terms.read_terms(start..end).entries;
         let mut last_matched = None;
 
         for i in start..end {
@@ -383,7 +380,7 @@ where N: Network
             self.cmds.truncate_cmds(last_matched + 1);
         }
 
-        self.terms.update(append.assume_matched_at, &append.terms);
+        self.terms.update_terms(append.assume_matched_at, &append.terms);
 
         let append_from = self.cmds.cmds_len().saturating_sub(append.assume_matched_at) as usize;
         if append_from < append.cmds.len() {
@@ -502,7 +499,7 @@ where N: Network
 
         let index = cmds_len - 1;
 
-        let last_term = self.terms.read_one(index);
+        let last_term = self.terms.read_one_term(index);
         LogId::new(last_term, index)
     }
 }
@@ -560,7 +557,7 @@ mod tests {
 
         let reply = core.handle_append(append).await.unwrap();
 
-        assert_eq!(core.terms.len(), 4);
+        assert_eq!(core.terms.terms_len(), 4);
         assert_eq!(core.cmds.cmds_len(), 4);
         assert_eq!(reply.matched.unwrap(), LogId::new(1, 3));
 
@@ -573,7 +570,7 @@ mod tests {
 
         let reply = core.handle_append(append).await.unwrap();
 
-        assert_eq!(core.terms.len(), 4);
+        assert_eq!(core.terms.terms_len(), 4);
         assert_eq!(core.cmds.cmds_len(), 4);
         assert_eq!(reply.matched.unwrap(), LogId::new(1, 3));
     }
