@@ -14,6 +14,7 @@ use crate::Membership;
 use crate::NodeId;
 use crate::ReplicationState;
 use crate::Storage;
+use crate::StorageExt;
 use crate::Term;
 use crate::append_reply::AppendReply;
 use crate::append_request::AppendRequest;
@@ -60,18 +61,10 @@ where
 {
     /// Spawn the Core onto the current Tokio runtime; return a sender
     /// to its mailbox.
-    pub(crate) fn spawn(
-        id: NodeId,
-        membership: Membership,
-        storage: S,
-        terms: TermArray,
-        cmds: CmdArray,
-        network: Arc<N>,
-    ) -> UnboundedSender<Event> {
+    pub(crate) fn spawn(id: NodeId, membership: Membership, storage: S, network: Arc<N>) -> UnboundedSender<Event> {
         let (tx, rx) = unbounded_channel();
         let core = Self {
-            terms,
-            cmds,
+            storage,
             network,
             id,
             membership,
@@ -135,12 +128,12 @@ where
     }
 
     async fn do_elect(&mut self) -> Result<(), io::Error> {
-        let term = self.terms.terms_len();
+        let term = self.storage.terms_len().await;
         let mut replications = BTreeMap::new();
-        replications.insert(self.id, ReplicationState::new(self.id, self.cmds.cmds_len()));
+        replications.insert(self.id, ReplicationState::new(self.id, self.storage.cmds_len().await));
 
         self.leader = Some(LeaderState {
-            term: self.terms.terms_len(),
+            term,
             granted_votes: std::iter::once(self.id).collect(), // grant self vote
             established: false,
             replications,
@@ -148,7 +141,7 @@ where
             pending_writes: Default::default(),
         });
 
-        self.terms.update_terms(term, &[term]);
+        self.storage.update_terms(term, &[term]);
 
         self.spawn_request_vote_rpcs(term).await?;
 

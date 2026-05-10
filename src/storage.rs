@@ -6,7 +6,7 @@ use crate::Term;
 use crate::cmd_array::CmdArray;
 use crate::term_array::TermArray;
 
-pub trait Storage {
+pub trait Storage: Send + Sync {
     fn update_terms(&mut self, since: u64, terms: &[Term]) -> impl Future<Output = ()> + Send;
     fn read_terms(&self, range: Range<u64>) -> impl Future<Output = ArrayChunk<Term>> + Send;
 
@@ -14,6 +14,20 @@ pub trait Storage {
     fn truncate_cmds(&mut self, after: u64) -> impl Future<Output = ()> + Send;
     fn read_cmds(&self, range: Range<u64>) -> impl Future<Output = ArrayChunk<Cmd>> + Send;
 }
+
+pub trait StorageExt: Storage {
+    fn terms_len(&self) -> impl Future<Output = u64> + Send {
+        let range = 0..0;
+        async move { self.read_terms(range).await.len }
+    }
+
+    fn cmds_len(&self) -> impl Future<Output = u64> + Send {
+        let range = 0..0;
+        async move { self.read_cmds(range).await.len }
+    }
+}
+
+impl<S> StorageExt for S where S: Storage {}
 
 pub struct MemStorage {
     terms: TermArray,
