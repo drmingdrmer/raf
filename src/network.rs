@@ -33,6 +33,7 @@ pub trait Network: Send + Sync + 'static {
         req: RequestVote,
     ) -> impl Future<Output = Result<RequestVoteReply, io::Error>> + Send;
 
+    /// Forward an [`AppendRequest`] to `target` and return its reply.
     fn append(
         &self,
         target: u64,

@@ -27,6 +27,7 @@ use crate::request_vote_reply::RequestVoteReply;
 /// the Core through this type.
 #[derive(Clone)]
 pub struct Raf {
+    /// Sender used by public APIs to enqueue work in the Core mailbox.
     mailbox_tx: UnboundedSender<Event>,
 }
 

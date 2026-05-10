@@ -27,11 +27,13 @@ use crate::storage_ext::StorageExt;
 use crate::write_reply::WriteReply;
 use crate::write_request::WriteRequest;
 
+/// Single-task protocol core for one `raf` node.
 pub(crate) struct Core<S, N>
 where
     S: Storage,
     N: Network,
 {
+    /// Persistent protocol storage.
     storage: S,
 
     /// Held in `Arc` so outbound RPCs can be cloned into spawned
@@ -39,8 +41,10 @@ where
     #[allow(dead_code)]
     network: Arc<N>,
 
+    /// Local node id.
     id: NodeId,
 
+    /// Static cluster membership.
     membership: Membership,
 
     /// Election / leadership state. `None` on followers; `Some`
@@ -48,7 +52,10 @@ where
     /// [`LeaderState`] and `DESIGN.md` §8.4.
     leader: Option<LeaderState>,
 
+    /// Sender side of the Core mailbox.
     mailbox_tx: UnboundedSender<Event>,
+
+    /// Receiver side of the Core mailbox.
     mailbox: UnboundedReceiver<Event>,
 }
 
@@ -86,6 +93,7 @@ where
         Ok(())
     }
 
+    /// Dispatch one mailbox event to its protocol handler.
     async fn handle_event(&mut self, event: Event) -> Result<(), io::Error> {
         match event {
             Event::Elect {} => {
@@ -121,10 +129,12 @@ where
         Ok(())
     }
 
+    /// Start a local election attempt.
     async fn elect(&mut self) -> Result<(), io::Error> {
         self.do_elect().await
     }
 
+    /// Create candidate state, reserve the local term slot, and send vote RPCs.
     async fn do_elect(&mut self) -> Result<(), io::Error> {
         let term = self.storage.terms_len().await;
         let mut replications = BTreeMap::new();
@@ -146,6 +156,7 @@ where
         Ok(())
     }
 
+    /// Spawn outbound vote requests for all peers.
     async fn spawn_request_vote_rpcs(&mut self, term: u64) -> Result<(), io::Error> {
         for peer in self.membership.node_ids() {
             if peer == &self.id {
@@ -227,6 +238,7 @@ where
         })
     }
 
+    /// Handle one vote reply for the current candidacy.
     async fn handle_request_vote_reply(
         &mut self,
         sending_term: Term,
@@ -252,6 +264,7 @@ where
         None
     }
 
+    /// Turn candidate state into established leader state.
     async fn establish_leader(&mut self) {
         let leader = self.leader.as_mut().unwrap();
         leader.established = true;
@@ -284,6 +297,7 @@ where
         }
     }
 
+    /// Try to dispatch one append RPC for every peer without an in-flight append.
     async fn try_initialize_replication(&mut self) {
         let Some(leader) = self.leader.as_mut() else {
             return;
@@ -345,6 +359,7 @@ where
         }
     }
 
+    /// Handle an inbound append request from a leader.
     async fn handle_append(&mut self, append: AppendRequest) -> Result<AppendReply, io::Error> {
         let last_term = self.storage.last_term().await;
         if append.term > last_term {
@@ -406,6 +421,7 @@ where
         })
     }
 
+    /// Handle one append reply from a replication target.
     async fn handle_append_reply(&mut self, sending_term: Term, target: NodeId, reply: AppendReply) {
         let Some(leader) = self.leader.as_mut() else {
             return;
@@ -438,6 +454,7 @@ where
         }
     }
 
+    /// Advance the leader commit index if a quorum has matched a newer index.
     async fn try_update_committed(&mut self) {
         let Some(leader) = self.leader.as_mut() else {
             return;
@@ -469,6 +486,7 @@ where
         }
     }
 
+    /// Reply to pending writes whose log index has become committed.
     async fn respond_write_replies(&mut self, committed: u64) {
         let Some(leader) = self.leader.as_mut() else {
             return;
@@ -534,6 +552,7 @@ where
         leader.pending_writes.push_back((index, reply_tx));
     }
 
+    /// Return the last log id derived from the command length and term array.
     async fn last_log_id(&self) -> LogId {
         let cmds_len = self.storage.cmds_len().await;
 

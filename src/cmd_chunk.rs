@@ -4,4 +4,5 @@
 use crate::ArrayChunk;
 use crate::Cmd;
 
+/// Command entries returned together with the source command-array length.
 pub type CmdChunk = ArrayChunk<Cmd>;

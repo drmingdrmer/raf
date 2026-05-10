@@ -17,5 +17,6 @@ pub struct RequestVote {
     /// The candidate's chosen leader identity.
     pub term: Term,
 
+    /// Last log id known by the candidate.
     pub last_log_id: LogId,
 }
