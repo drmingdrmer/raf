@@ -22,7 +22,7 @@ use crate::term::Term;
 pub struct RequestVote {
     /// The candidate's chosen leader identity — the next index past
     /// the end of its local log.
-    pub clock: Term,
+    pub term: Term,
 
-    pub last_history: LogId,
+    pub last_log_id: LogId,
 }

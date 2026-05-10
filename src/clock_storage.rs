@@ -3,6 +3,7 @@ use std::ops::Range;
 
 use crate::ArrayChunk;
 use crate::LogIndex;
+use crate::log_id::LogId;
 use crate::term::Term;
 
 pub type ClockChunk = ArrayChunk<Term>;
@@ -57,10 +58,10 @@ impl TermArray {
         self.clocks.get(index as usize).unwrap().clone()
     }
 
-    pub fn last(&self) -> (LogIndex, Term) {
+    pub fn last(&self) -> LogId {
         let last = self.clocks.last().unwrap();
 
         let index = self.len() - 1;
-        (index, last.clone())
+        LogId::new(last.clone(), index)
     }
 }
