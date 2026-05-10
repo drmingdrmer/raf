@@ -8,11 +8,11 @@ use crate::clock::Clock;
 pub type ClockChunk = ArrayChunk<Clock>;
 
 #[derive(Debug, Clone)]
-pub struct ClockArray {
+pub struct TermArray {
     clocks: Vec<Clock>,
 }
 
-impl ClockArray {
+impl TermArray {
     pub fn new(clocks: Vec<Clock>) -> Self {
         Self { clocks }
     }

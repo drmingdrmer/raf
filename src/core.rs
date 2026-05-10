@@ -16,7 +16,7 @@ use crate::Membership;
 use crate::NodeId;
 use crate::ReplicationState;
 use crate::append_request::AppendRequest;
-use crate::clock_storage::ClockArray;
+use crate::clock_storage::TermArray;
 use crate::hisotory_id::HistoryId;
 use crate::history_storage::CmdArray;
 use crate::leader_state::LeaderState;
@@ -57,7 +57,7 @@ pub(crate) enum Event {
 pub(crate) struct Core<N>
 where N: Network
 {
-    clock_storage: ClockArray,
+    clock_storage: TermArray,
 
     history: CmdArray,
 
@@ -84,7 +84,7 @@ where N: Network
 {
     /// Spawn the Core onto the current Tokio runtime; return a sender
     /// to its mailbox.
-    pub(crate) fn spawn(clock_storage: ClockArray, storage: CmdArray, network: Arc<N>) -> UnboundedSender<Event> {
+    pub(crate) fn spawn(clock_storage: TermArray, storage: CmdArray, network: Arc<N>) -> UnboundedSender<Event> {
         let (tx, rx) = unbounded_channel();
         let core = Self {
             clock_storage,
