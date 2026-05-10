@@ -161,17 +161,19 @@ where N: Network
     }
 
     async fn do_elect(&mut self) -> Result<(), io::Error> {
-        let clock = self.term_storage.len();
+        let term = self.term_storage.len();
 
         self.leader = Some(LeaderState {
             term: self.term_storage.len(),
             granted_votes: std::iter::once(0).collect(), // grant self vote
             established: false,
+            replications: Default::default(),
+            committed: 0,
         });
 
-        self.term_storage.update(clock, &[clock]);
+        self.term_storage.update(term, &[term]);
 
-        self.spawn_request_vote_rpcs(clock).await?;
+        self.spawn_request_vote_rpcs(term).await?;
 
         Ok(())
     }
@@ -192,10 +194,19 @@ where N: Network
             let network = Arc::clone(&self.network);
             let reply_tx = self.mailbox_tx.clone();
 
+            let sending_term = clock.clone();
+            let target = peer.clone();
+
             tokio::spawn(async move {
-                match network.request_vote(peer, req).await {
+                match network.request_vote(target, req).await {
                     Ok(reply) => {
-                        let _ = reply_tx.send(Event::RequestVoteReply { reply });
+                        reply_tx
+                            .send(Event::RequestVoteReply {
+                                sending_term,
+                                target,
+                                reply,
+                            })
+                            .ok();
                     }
                     Err(e) => {
                         eprintln!("failed to send RequestVote to peer {}: {}", peer, e);
@@ -223,10 +234,10 @@ where N: Network
     ///    is at least as up-to-date as we are (§6.3).
     async fn handle_request_vote(&mut self, req: RequestVote) -> Result<RequestVoteReply, io::Error> {
         let local_last = self.term_storage.last();
-        let local_term_len = self.term_storage.last();
         let local_cmds_len = self.cmds.len();
-        let local_last_term = self.term_storage.read_one(local_term_len - 1);
-        let local_last_log_id = LogId::new(local_last_term, local_cmds_len - 1);
+        let local_last_cmd_term = self.term_storage.read_one()
+        
+        let local_last_log_id = LogId::new(local_last.term, local_cmds_len - 1);
 
         if req.term < local_last.term {
             return Ok(RequestVoteReply {
