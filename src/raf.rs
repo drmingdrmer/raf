@@ -41,10 +41,7 @@ impl Raf {
         self.handle.clone()
     }
 
-    pub async fn handle_request_vote(
-        &self,
-        req: RequestVote,
-    ) -> std::io::Result<crate::request_vote_reply::RequestVoteReply> {
+    pub async fn request_vote(&self, req: RequestVote) -> std::io::Result<crate::request_vote_reply::RequestVoteReply> {
         self.handle.request_vote(req).await
     }
 }

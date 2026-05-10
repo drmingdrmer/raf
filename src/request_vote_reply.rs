@@ -22,8 +22,8 @@ pub struct RequestVoteReply {
     /// this value, the candidate uses this to skip ahead.
     pub term_len: LogIndex,
 
-    /// The responder's local [`AcceptedContent`]. Used by the
-    /// candidate as the freshness comparator if the vote was
-    /// rejected on freshness grounds.
+    /// The responder's local last log id. Used by the candidate as
+    /// the freshness comparator if the vote was rejected on freshness
+    /// grounds.
     pub last_history: LogId,
 }

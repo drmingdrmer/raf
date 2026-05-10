@@ -5,6 +5,8 @@ use std::io;
 use tokio::sync::mpsc::UnboundedSender;
 use tokio::sync::oneshot;
 
+use crate::AppendReply;
+use crate::AppendRequest;
 use crate::core::Event;
 use crate::request_vote::RequestVote;
 use crate::request_vote_reply::RequestVoteReply;
@@ -31,6 +33,14 @@ impl Handle {
         self.mailbox_tx.is_closed()
     }
 
+    /// Trigger a local election attempt.
+    ///
+    /// This only enqueues the election event. The Core owns the
+    /// actual election state transition and outbound RequestVote RPCs.
+    pub fn elect(&self) -> Result<(), io::Error> {
+        self.mailbox_tx.send(Event::Elect {}).map_err(|_| io::Error::other("Core mailbox closed"))
+    }
+
     /// Submit an inbound `RequestVote` RPC to the Core and await the
     /// reply.
     ///
@@ -42,12 +52,20 @@ impl Handle {
     /// Errors when the Core has already shut down — either the
     /// mailbox is closed, or the Core dropped the reply channel
     /// without sending.
-    pub async fn request_vote(&self, req: RequestVote) -> io::Result<RequestVoteReply> {
+    pub async fn request_vote(&self, req: RequestVote) -> Result<RequestVoteReply, io::Error> {
         let (reply_tx, reply_rx) = oneshot::channel();
         self.mailbox_tx
             .send(Event::RequestVote { req, reply_tx })
             .map_err(|_| io::Error::other("Core mailbox closed"))?;
         reply_rx.await.map_err(|_| io::Error::other("Core dropped RequestVote reply channel"))
+    }
+
+    pub async fn append(&self, req: AppendRequest) -> Result<AppendReply, io::Error> {
+        let (reply_tx, reply_rx) = oneshot::channel();
+        self.mailbox_tx
+            .send(Event::Append { req, reply_tx })
+            .map_err(|_| io::Error::other("Core mailbox closed"))?;
+        reply_rx.await.map_err(|_| io::Error::other("Core dropped Append reply channel"))
     }
 
     /// Submit an application write to the leader and await commit.
@@ -60,7 +78,7 @@ impl Handle {
     ///
     /// The outer `io::Error` covers Core-shutdown cases (mailbox
     /// closed, reply channel dropped).
-    pub async fn write(&self, req: WriteRequest) -> io::Result<WriteReply> {
+    pub async fn write(&self, req: WriteRequest) -> Result<WriteReply, io::Error> {
         let (reply_tx, reply_rx) = oneshot::channel();
         self.mailbox_tx
             .send(Event::Write { req, reply_tx })

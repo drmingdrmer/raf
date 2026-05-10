@@ -61,7 +61,7 @@ pub(crate) enum Event {
     /// else returns an `io::Error`.
     Write {
         req: WriteRequest,
-        reply_tx: oneshot::Sender<io::Result<WriteReply>>,
+        reply_tx: oneshot::Sender<Result<WriteReply, io::Error>>,
     },
 }
 
@@ -231,8 +231,7 @@ where N: Network
     ///    we have ever written, so it is automatically higher than any leader_index we have granted
     ///    before (the protocol invariant `value <= position` makes the explicit "higher than
     ///    last_leader_index" check redundant — see §6.4).
-    /// 2. `req.accepted >= log.accepted` — lex-compared on `(leader_index, index)`; the candidate
-    ///    is at least as up-to-date as we are (§6.3).
+    /// 2. `req.last_log_id > local.last_log_id` — the candidate's history is fresher than ours.
     async fn handle_request_vote(&mut self, req: RequestVote) -> Result<RequestVoteReply, io::Error> {
         let local_last = self.term_storage.last();
 
@@ -502,7 +501,7 @@ where N: Network
     /// (follower, or candidate still gathering votes) returns an
     /// `io::Error` — the application interprets that as "talk to a
     /// different node".
-    async fn handle_write(&mut self, req: WriteRequest, reply_tx: oneshot::Sender<io::Result<WriteReply>>) {
+    async fn handle_write(&mut self, req: WriteRequest, reply_tx: oneshot::Sender<Result<WriteReply, io::Error>>) {
         let is_established_leader = self.leader.as_ref().is_some_and(|state| state.established);
 
         if !is_established_leader {
@@ -520,7 +519,11 @@ where N: Network
     /// replicate the new entry to peers, (3) advance the accepted
     /// index once a quorum has acked, and (4) reply with the
     /// committed index.
-    async fn dispatch_leader_write(&mut self, _req: WriteRequest, reply_tx: oneshot::Sender<io::Result<WriteReply>>) {
+    async fn dispatch_leader_write(
+        &mut self,
+        _req: WriteRequest,
+        reply_tx: oneshot::Sender<Result<WriteReply, io::Error>>,
+    ) {
         let _ = reply_tx.send(Err(io::Error::other(
             "leader-side write replication not yet implemented",
         )));
@@ -533,5 +536,114 @@ where N: Network
 
         let last_term = self.term_storage.read_one(index);
         LogId::new(last_term, index)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::io;
+    use std::sync::Arc;
+
+    use tokio::sync::mpsc::unbounded_channel;
+
+    use super::*;
+    use crate::append_reply::AppendReply;
+    use crate::append_request::AppendRequest;
+    use crate::clock_storage::TermArray;
+    use crate::history_storage::CmdArray;
+
+    struct NoopNetwork;
+
+    impl Network for NoopNetwork {
+        async fn request_vote(&self, _target: u64, _req: RequestVote) -> Result<RequestVoteReply, io::Error> {
+            unreachable!("test network should not send RequestVote")
+        }
+
+        async fn append(&self, _target: u64, _req: AppendRequest) -> Result<AppendReply, io::Error> {
+            unreachable!("test network should not send Append")
+        }
+    }
+
+    fn new_core(terms: Vec<Term>, cmds_len: usize, membership: Membership) -> Core<NoopNetwork> {
+        let (mailbox_tx, mailbox) = unbounded_channel();
+
+        Core {
+            term_storage: TermArray::new(terms),
+            cmds: CmdArray::new(vec![Cmd::empty(); cmds_len]),
+            network: Arc::new(NoopNetwork),
+            id: 1,
+            membership,
+            leader: None,
+            mailbox_tx,
+            mailbox,
+        }
+    }
+
+    #[tokio::test]
+    async fn handle_append_appends_only_missing_commands() {
+        let mut core = new_core(vec![1, 1], 2, Membership::new(vec![1, 2, 3]));
+
+        let append = AppendRequest {
+            term: 1,
+            assume_matched_at: 1,
+            terms: vec![1, 1, 1],
+            cmds: vec![Cmd::empty(); 3],
+        };
+
+        let reply = core.handle_append(append).await.unwrap();
+
+        assert_eq!(core.term_storage.len(), 4);
+        assert_eq!(core.cmds.len(), 4);
+        assert_eq!(reply.matched.unwrap(), LogId::new(1, 3));
+
+        let append = AppendRequest {
+            term: 1,
+            assume_matched_at: 1,
+            terms: vec![1, 1, 1],
+            cmds: vec![Cmd::empty(); 3],
+        };
+
+        let reply = core.handle_append(append).await.unwrap();
+
+        assert_eq!(core.term_storage.len(), 4);
+        assert_eq!(core.cmds.len(), 4);
+        assert_eq!(reply.matched.unwrap(), LogId::new(1, 3));
+    }
+
+    #[tokio::test]
+    async fn try_update_committed_advances_candidate_set() {
+        let mut core = new_core(vec![1; 13], 13, Membership::new(vec![1, 2, 3, 4, 5]));
+
+        core.leader = Some(LeaderState {
+            term: 10,
+            granted_votes: [1, 2, 3].into(),
+            established: true,
+            replications: Default::default(),
+            committed: 0,
+        });
+
+        let leader = core.leader.as_mut().unwrap();
+        leader.replications.insert(2, ReplicationState {
+            target: 2,
+            matched: 10,
+            end: 13,
+            inflight: Arc::new(tokio::sync::Semaphore::new(1)),
+        });
+        leader.replications.insert(3, ReplicationState {
+            target: 3,
+            matched: 12,
+            end: 13,
+            inflight: Arc::new(tokio::sync::Semaphore::new(1)),
+        });
+        leader.replications.insert(4, ReplicationState {
+            target: 4,
+            matched: 12,
+            end: 13,
+            inflight: Arc::new(tokio::sync::Semaphore::new(1)),
+        });
+
+        core.try_update_committed().await;
+
+        assert_eq!(core.leader.as_ref().unwrap().committed, 10);
     }
 }
