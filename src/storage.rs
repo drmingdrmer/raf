@@ -32,7 +32,10 @@ pub trait StorageExt: Storage {
 
     async fn fill_terms_gap(&mut self, since: u64) {
         let len = self.terms_len().await;
-        for index in since
+        let start = since.min(len);
+        for index in start..len {
+            self.update_terms(index, &[index as Term]).await;
+        }
     }
 
     fn cmds_len(&self) -> impl Future<Output = u64> + Send {

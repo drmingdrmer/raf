@@ -277,11 +277,12 @@ where
 
         // Occupy all entries with no-op Cmd.
         let cmds = vec![Cmd::empty(); n as usize];
-        self.cmds.append_cmds(cmds);
+        self.storage.append_cmds(cmds).await;
 
         if let Some(replication) = leader.replications.get_mut(&self.id) {
-            replication.matched = self.cmds.cmds_len() - 1;
-            replication.end = self.cmds.cmds_len();
+            let cmds_len = self.storage.cmds_len().await;
+            replication.matched = cmds_len - 1;
+            replication.end = cmds_len;
         }
     }
 
@@ -316,8 +317,8 @@ where
             // TODO: len should not exceed cmds.len()
 
             // includes the last matched, will be used in the role of `prev`
-            let terms = self.terms.read_terms(start..start + len).entries;
-            let cmds = self.cmds.read_cmds(start..start + len).entries;
+            let terms = self.storage.read_terms(start..start + len).await.entries;
+            let cmds = self.storage.read_cmds(start..start + len).await.entries;
 
             let append_request = AppendRequest {
                 term: leader.term,
@@ -347,7 +348,7 @@ where
     }
 
     async fn handle_append(&mut self, append: AppendRequest) -> Result<AppendReply, io::Error> {
-        let last_term = self.terms.last_term();
+        let last_term = self.storage.last_term().await;
         if append.term > last_term {
             // TODO: save last-seen, instead of updating terms. Updating terms means accepting a
             // RequestVote.
@@ -363,11 +364,11 @@ where
 
         let start = append.assume_matched_at;
         let end = append.assume_matched_at + append.terms.len() as u64;
-        let end = end.min(self.cmds.cmds_len());
+        let end = end.min(self.storage.cmds_len().await);
 
         // find the matches
 
-        let local_terms = self.terms.read_terms(start..end).entries;
+        let local_terms = self.storage.read_terms(start..end).await.entries;
         let mut last_matched = None;
 
         for i in start..end {
@@ -387,14 +388,14 @@ where
         };
 
         if last_matched < end - 1 {
-            self.cmds.truncate_cmds(last_matched + 1);
+            self.storage.truncate_cmds(last_matched + 1).await;
         }
 
-        self.terms.update_terms(append.assume_matched_at, &append.terms);
+        self.storage.update_terms(append.assume_matched_at, &append.terms).await;
 
-        let append_from = self.cmds.cmds_len().saturating_sub(append.assume_matched_at) as usize;
+        let append_from = self.storage.cmds_len().await.saturating_sub(append.assume_matched_at) as usize;
         if append_from < append.cmds.len() {
-            self.cmds.append_cmds(append.cmds[append_from..].to_vec());
+            self.storage.append_cmds(append.cmds[append_from..].to_vec()).await;
         }
 
         Ok(AppendReply {
@@ -524,23 +525,23 @@ where
             return;
         };
 
-        self.terms.update_terms(self.cmds.cmds_len(), &[leader.term]);
-        self.cmds.append_cmds(vec![Cmd::empty()]);
+        self.storage.update_terms(self.storage.cmds_len().await, &[leader.term]).await;
+        self.storage.append_cmds(vec![Cmd::empty()]).await;
 
-        let index = self.cmds.cmds_len() - 1;
+        let index = self.storage.cmds_len().await - 1;
         if let Some(replication) = leader.replications.get_mut(&self.id) {
             replication.matched = index;
-            replication.end = self.cmds.cmds_len();
+            replication.end = self.storage.cmds_len().await;
         }
         leader.pending_writes.push_back((index, reply_tx));
     }
 
     async fn last_log_id(&self) -> LogId {
-        let cmds_len = self.cmds.cmds_len();
+        let cmds_len = self.storage.cmds_len().await;
 
         let index = cmds_len - 1;
 
-        let last_term = self.terms.read_one_term(index);
+        let last_term = self.storage.read_one_term(index).await;
         LogId::new(last_term, index)
     }
 }
