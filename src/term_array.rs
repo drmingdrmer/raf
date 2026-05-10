@@ -1,7 +1,6 @@
 use std::ops::Range;
 
 use crate::ArrayChunk;
-use crate::LogIndex;
 use crate::term::Term;
 
 pub type TermChunk = ArrayChunk<Term>;
@@ -22,14 +21,6 @@ impl TermArray {
 
     pub fn terms_len(&self) -> u64 {
         self.terms.len() as u64
-    }
-
-    // fill term `index` for entry `index` for `[since, len)`
-    pub fn fill_terms_gap(&mut self, since: u64) {
-        let start = since.min(self.terms_len()) as usize;
-        for index in start..self.terms.len() {
-            self.terms[index] = index as Term;
-        }
     }
 
     pub fn update_terms(&mut self, since: u64, terms: &[Term]) -> u64 {
@@ -55,13 +46,5 @@ impl TermArray {
             Vec::new()
         };
         TermChunk { len, entries: terms }
-    }
-
-    pub fn read_one_term(&self, index: LogIndex) -> Term {
-        *self.terms.get(index as usize).unwrap()
-    }
-
-    pub fn last_term(&self) -> Term {
-        *self.terms.last().unwrap()
     }
 }
