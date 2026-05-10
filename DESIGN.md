@@ -50,7 +50,7 @@ the same properties.*
 ### 6.1 Log Model — Parallel Arrays + LogId
 
 The log is a pair of parallel sequences indexed by the same
-log-index space (a `u64`):
+log-index space:
 
 - a **term sequence** — at each index, the term of the leader
   that owns that slot;
@@ -87,7 +87,7 @@ appending the leader's payloads.
 
 Persistence of these sequences is out of scope for the current
 draft; the project will revisit a durable storage layer once the
-protocol is fully fleshed out (see §15.1.4).
+protocol is fully fleshed out.
 
 ### 6.3 Steady State vs. Candidate State
 
@@ -228,8 +228,7 @@ distinguish themselves by term.
 The voter:
 
 - Drops any in-memory leader state — granting is incompatible
-  with continued candidacy or leadership on a different term
-  (§15.1.1).
+  with continued candidacy or leadership on a different term.
 - Overwrites the term sequence at index `local.last_index + 1`
   with `req.term`, reserving that slot for the new leader.
 
@@ -265,10 +264,10 @@ The candidate becomes an **established leader** when the granted
 set reaches a quorum of the cluster. Establishment flips the flag
 once and never reverses within the same leader-state instance.
 
-Leader state is transient (in-memory only — see §15.1.1) and
-distinct from the log itself. The in-memory exception is
-deliberate: election outcomes don't need to survive a crash — a
-restarted node simply re-runs the election.
+Leader state is transient (in-memory only) and distinct from the
+log itself. The in-memory exception is deliberate: election
+outcomes don't need to survive a crash — a restarted node simply
+re-runs the election.
 
 #### Establishment is unique per term
 
@@ -553,222 +552,3 @@ safety invariants on an alternative ordering.
 [fpaxos]:       https://fpaxos.github.io/
 [kip-595]:      https://cwiki.apache.org/confluence/display/KAFKA/KIP-595:+A+Raft+Protocol+for+the+Metadata+Quorum
 [fast-raft]:    https://arxiv.org/abs/2506.17793
-
----
-
-## 14. Implementation Conventions
-
-The implementation follows the practices established in
-[`openraft`][openraft], my prior Raft implementation. This section records
-those practices so the development of `raf` stays consistent with them.
-Reference path on this machine: `~/xp/vcs/github.com/drmingdrmer/openraft`.
-
-[openraft]: https://github.com/drmingdrmer/openraft
-
-### 14.1 Language and Repository Layout
-
-- **Language**: Rust. Toolchain pinned via a `rust-toolchain` file.
-- **Workspace layout**: a Cargo workspace with the core crate at the
-  repository root (`raf/`) and any sub-crates (runtime adapters, stores,
-  examples, integration tests) as members.
-- **One main type per file**: each file contains a single primary trait or
-  type with its impls. Applies to *new* code; existing files are not
-  reorganized unless explicitly asked.
-- **Public-API change annotation**: every change to a public type, trait,
-  or associated type carries a `#[since(version = "X.Y.Z", change = "...")]`
-  attribute, placed above any prior `#[since]`. Mechanical method-signature
-  changes that follow from a parent generic-parameter change do not need
-  one. `pub(crate)` items do not need one.
-
-### 14.2 Makefile-Driven Workflow
-
-The `Makefile` is the single entry point for build, test, and lint —
-**`cargo fmt` and `cargo clippy` are never invoked directly**, only through
-the Makefile, so settings stay consistent across all workspace crates.
-
-Standard targets (mirroring openraft):
-
-| Target | Purpose |
-|---|---|
-| `make lint` | `cargo fmt` + `cargo clippy --no-deps --all-targets -- -D warnings` across every workspace crate |
-| `make test` | `cargo test` across the relevant feature combinations |
-| `make basic_check` | fmt + clippy `--fix` + unit tests + integration tests + strict clippy + strict doc build |
-| `make doc` | `RUSTDOCFLAGS="-D warnings" cargo doc --document-private-items --all --no-deps` |
-| `make check` | `RUSTFLAGS="-D warnings" cargo check` for every crate |
-| `make unused_dep` | `cargo machete` per crate |
-| `make typos` | `typos` across docs and source |
-| `make detsim` | deterministic-simulation test runner |
-| `make clean` | `cargo clean` per crate |
-
-Style configs:
-
-- `rustfmt.toml`: `max_width = 120`, `comment_width = 100`,
-  `imports_granularity = "Item"`, `group_imports = "StdExternalCrate"`,
-  `reorder_imports = true`, `where_single_line = true`,
-  `trailing_comma = "Vertical"`, `overflow_delimited_expr = true`,
-  `merge_derives = false`, `inline_attribute_width = 0`,
-  `chain_width = 100`.
-- `clippy.toml`: `too-many-arguments-threshold = 10`,
-  `cognitive-complexity-threshold = 25`.
-
-### 14.3 GitHub Actions / CI
-
-CI lives in `.github/workflows/`. The main file is `ci.yaml`, structured as
-a set of focused matrix jobs rather than one monolithic job:
-
-- **build (release)** — release build with all features enabled.
-- **test core crates** — `cargo test` for the core crate(s), matrix over
-  `stable` and `nightly`.
-- **test integration crate** — `cargo test` for the integration-test
-  crate, with a network-delay matrix variant.
-- **store tests** — per-store crate, with defensive-store env flag
-  (`*_STORE_DEFENSIVE=on`) enabled.
-- **feature matrix** — core crate tested across each meaningful feature
-  combination (`serde`, `bt`, `single-threaded`, etc.).
-- **detsim** — deterministic simulation test (e.g. turmoil-based fuzz),
-  toolchain pinned to a specific nightly date.
-- **lint** — `cargo fmt --all -- --check`, full-workspace clippy with
-  `-D warnings` across feature combinations, `cargo doc` with
-  `RUSTDOCFLAGS="-D warnings"`, doc tests, `cargo audit`. Toolchain
-  pinned to the same nightly date as `detsim`.
-- **examples** — matrix per example, on both `stable` and `nightly`.
-
-Cross-cutting CI conventions:
-
-- Run on `push`, `pull_request`, and a nightly `schedule` cron.
-- Always set `RUST_LOG=debug` and `RUST_BACKTRACE=full`.
-- Use `RUST_TEST_THREADS: 2` for tests that contend on time/scheduling.
-- On failure, upload the per-crate `_log/` directory as an artifact so
-  the failure can be diagnosed offline.
-- Toolchains driven by `actions-rust-lang/setup-rust-toolchain@v1`.
-
-A separate `.github/workflows/commit-message-check.yml` enforces a
-prefix on every commit subject. Allowed prefixes:
-
-```
-DataChange | Change/change | Feature/feat | Improve/improve |
-Perf/perf | Dep/deps | Doc/docs | Test/test | CI/ci |
-Refactor/refactor | Fix/fix | Fixdoc | Fixup | BumpVer | Chore/chore |
-Build(deps) | Merge*
-```
-
-A `.mergify.yml` automates merge behavior; `dependabot.yml` keeps
-dependencies current.
-
-### 14.4 Coding Conventions
-
-Style rules carried over from openraft, on top of standard `rustfmt` /
-`clippy`:
-
-- **`where` clauses for all trait bounds**, never inline:
-  - Correct: `fn foo<T>(x: T) where T: RaftLeaderId`
-  - Wrong:   `fn foo<T: RaftLeaderId>(x: T)`
-- **Use trait names, not expanded bound lists.** If a trait already
-  implies `Debug + Display + Clone + ...`, write the trait, not the
-  expansion:
-  - Correct: `struct Foo<T> where T: RaftLeaderId`
-  - Wrong:   `struct Foo<T> where T: PartialOrd + Eq + Clone + Debug + Display + 'static`
-- **One main trait/type per file** (see §14.1).
-- **Where-bounds + `#[since]`** discipline for any public API change.
-
-### 14.5 Git / PR Workflow
-
-- Subject lines must start with one of the allowed commit prefixes
-  (§14.3) or be a `Merge ...` commit.
-- Commit messages follow the three-tier *subject / `# Summary` /
-  `# Details`* structure (see top-level personal coding rules).
-- **Rebase and squash** the branch onto the latest `main` *before*
-  publishing a PR.
-- **Do not rebase after publishing a PR** — only merge from `main`. This
-  preserves stable commit hashes for review.
-- Pre-PR checklist: `make lint` and `make basic_check` both pass
-  locally; any documentation update is reflected in the user guide
-  (`guide/`, mdBook).
-
----
-
-## 15. Software Architecture
-
-`raf` is a **single-crate Rust library** — one Cargo package, no
-workspace sub-crates.
-
-### 15.1 Components
-
-#### 15.1.1 Core
-
-- One singleton instance per wrapped node, owned by an internal task.
-- Runs an event loop pulling events from a single mailbox.
-- An event is one of: an inbound RPC (`RequestVote`, `Append`), a
-  reply to an outbound RPC (`RequestVoteReply`, `AppendReply`), an
-  application command (`Write`), or an internal trigger (`Elect`).
-  Inbound RPC and application events carry a oneshot reply channel
-  so the Core can produce replies inline.
-- Replies are produced inline within the same loop, mirroring
-  openraft's `RaftCore`.
-- **Holds the term and cmd sequences directly in memory.** They
-  are concrete in-process structures — there is no `Storage` trait
-  abstraction at present (§15.1.4). Every handler reads from and
-  writes to these sequences directly.
-- **Holds in-memory leader state** when the node is a candidate or
-  established leader (§8.4): the term, the granted-vote tally, the
-  `established` flag, the per-peer replication state, and the
-  committed index. Leader state is transient by design — it does
-  not need to survive restart.
-
-#### 15.1.2 Raf (Top-Level Handle)
-
-- Cheap to clone; the application and the inbound transport
-  clone it freely. Internally a thin wrapper around the Core's
-  mailbox sender, so cloning is the cost of an `Arc` bump.
-- The only API surface to the Core. The application submits
-  writes through it (§9.1); the inbound transport forwards peer
-  RPCs through it. Both paths fan into the Core's mailbox and
-  await the inline reply.
-
-#### 15.1.3 Network
-
-- A single instance held by the Core, behind an `Arc` so outbound
-  RPCs can be cloned into spawned subtasks. **No per-replicator
-  parallel task** — the main runtime difference from openraft.
-- Two outbound RPCs are exposed so far: `request_vote` (§7.1) and
-  `append` (§7.2). More will be added as the protocol fills in.
-- Pattern: the Core spawns an outbound RPC, awaits the reply on
-  the spawned task, and posts the reply back to its own mailbox
-  as a `*Reply` event (so the main loop can process the reply
-  with full mailbox-ordered semantics). **Inbound RPCs *from*
-  peers also arrive through the mailbox** (§7) — both directions
-  flow through the Core's mailbox, but only the inbound direction
-  carries an inline reply channel.
-
-#### 15.1.4 Storage
-
-A pluggable durability layer is anticipated but **not yet
-present**. The current draft holds the term and cmd sequences as
-concrete in-memory structures owned by the Core (§15.1.1); a
-restart is not yet survivable. Once the protocol is fully fleshed
-out, a storage abstraction will be reintroduced so application-
-supplied backends can persist these sequences.
-
-### 15.3 Construction
-
-The top-level [`Raf`] constructor spawns the Core task and
-returns a cheap-clone handle that both the application and the
-inbound transport can hold and clone. Construction takes the
-node's identity, the cluster membership, the in-memory term and
-cmd sequences, and a `Network` implementation. The exact
-constructor signature is the source of truth (see
-`src/raf.rs`).
-
-### 15.4 Differences From openraft
-
-| Aspect | openraft | raf |
-|---|---|---|
-| Log id | `(term, node_id, log_index)` | `(term, log_index)` — standard Raft shape |
-| Replication driver | per-target task running in parallel with `RaftCore` | single Network instance, all I/O via Core mailbox |
-| Network trait | per-target factory + per-target send | one singleton |
-| Replication probe | dedicated `next_index` walk | bisection-based `Append` window (§9.2.2) |
-| Snapshots | supported | out of scope |
-| Membership changes | supported | out of scope |
-| State machine | required (`RaftStateMachine` trait) | not part of `raf`; application owns log application |
-| Persistent storage | pluggable trait | not yet present (§15.1.4) |
-
