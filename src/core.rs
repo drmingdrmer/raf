@@ -15,14 +15,14 @@ use crate::ReplicationState;
 use crate::Term;
 use crate::append_reply::AppendReply;
 use crate::append_request::AppendRequest;
-use crate::clock_storage::TermArray;
+use crate::cmd_array::CmdArray;
 use crate::event::Event;
-use crate::history_storage::CmdArray;
 use crate::leader_state::LeaderState;
 use crate::log_id::LogId;
 use crate::network::Network;
 use crate::request_vote::RequestVote;
 use crate::request_vote_reply::RequestVoteReply;
+use crate::term_array::TermArray;
 use crate::write_reply::WriteReply;
 use crate::write_request::WriteRequest;
 
@@ -59,14 +59,14 @@ where N: Network
     pub(crate) fn spawn(
         id: NodeId,
         membership: Membership,
-        term_storage: TermArray,
-        storage: CmdArray,
+        terms: TermArray,
+        cmds: CmdArray,
         network: Arc<N>,
     ) -> UnboundedSender<Event> {
         let (tx, rx) = unbounded_channel();
         let core = Self {
-            terms: term_storage,
-            cmds: storage,
+            terms,
+            cmds,
             network,
             id,
             membership,
@@ -153,11 +153,11 @@ where N: Network
                 continue;
             }
 
-            let last_history_id = self.last_log_id().await;
+            let last_log_id = self.last_log_id().await;
 
             let req = RequestVote {
                 term,
-                last_log_id: last_history_id,
+                last_log_id,
             };
 
             let network = Arc::clone(&self.network);
@@ -189,16 +189,11 @@ where N: Network
 
     /// Decide an inbound `RequestVote` per `DESIGN.md` §8.3.
     ///
-    /// Reads current state from `Storage` on every call. The Core
-    /// keeps no in-memory mirror of log state — `Storage` is the
-    /// single source of truth (see `DESIGN.md` §15.1.4 and
-    /// §15.1.1).
+    /// Reads current state from the term and command arrays on every call.
     ///
     /// Grant iff both:
-    /// 1. `req.leader_index >= log.len` — the candidate's claimed identity is past every position
-    ///    we have ever written, so it is automatically higher than any leader_index we have granted
-    ///    before (the protocol invariant `value <= position` makes the explicit "higher than
-    ///    last_leader_index" check redundant — see §6.4).
+    /// 1. `req.term >= local.last_term` — the candidate is not behind the latest term we have
+    ///    stored or reserved.
     /// 2. `req.last_log_id > local.last_log_id` — the candidate's history is fresher than ours.
     async fn handle_request_vote(&mut self, req: RequestVote) -> Result<RequestVoteReply, io::Error> {
         let local_last = self.terms.last();
@@ -211,7 +206,7 @@ where N: Network
             return Ok(RequestVoteReply {
                 granted: false,
                 term_len: local_last.index + 1,
-                last_history: local_last_log_id,
+                last_log_id: local_last_log_id,
             });
         }
 
@@ -219,7 +214,7 @@ where N: Network
             return Ok(RequestVoteReply {
                 granted: false,
                 term_len: local_last.index + 1,
-                last_history: local_last_log_id,
+                last_log_id: local_last_log_id,
             });
         }
 
@@ -231,7 +226,7 @@ where N: Network
         Ok(RequestVoteReply {
             granted: true,
             term_len: local_last.index + 1,
-            last_history: local_last_log_id,
+            last_log_id: local_last_log_id,
         })
     }
 
@@ -347,8 +342,8 @@ where N: Network
         //
         let last = self.terms.last();
         if append.term > last.term {
-            // TODO: save last-seen, instead of update storage. updating storage means accept a
-            // request-vote. self.term_storage.update(append.term, &[append.term]);
+            // TODO: save last-seen, instead of updating terms. Updating terms means accepting a
+            // RequestVote.
         } else if append.term < last.term {
             return Ok(AppendReply {
                 term: last.term,
@@ -475,10 +470,13 @@ where N: Network
     /// `io::Error` — the application interprets that as "talk to a
     /// different node".
     async fn handle_write(&mut self, req: WriteRequest, reply_tx: oneshot::Sender<Result<WriteReply, io::Error>>) {
-        let is_established_leader = self.leader.as_ref().is_some_and(|state| state.established);
+        let Some(leader) = self.leader.as_mut() else {
+            reply_tx.send(Err(io::Error::other("not a leader; cannot handle write requests"))).ok();
+            return;
+        };
 
-        if !is_established_leader {
-            let _ = reply_tx.send(Err(io::Error::other("not a leader; cannot handle write requests")));
+        if !leader.established {
+            reply_tx.send(Err(io::Error::other("not a leader; cannot handle write requests"))).ok();
             return;
         }
 
@@ -489,17 +487,14 @@ where N: Network
     ///
     /// TODO: implement leader-side write replication.
     /// Will (1) append the request locally at `log.len`, (2)
-    /// replicate the new entry to peers, (3) advance the accepted
-    /// index once a quorum has acked, and (4) reply with the
-    /// committed index.
+    /// replicate the new entry to peers, (3) advance the committed
+    /// index once a quorum has acked, and (4) reply with that index.
     async fn dispatch_leader_write(
         &mut self,
         _req: WriteRequest,
         reply_tx: oneshot::Sender<Result<WriteReply, io::Error>>,
     ) {
-        let _ = reply_tx.send(Err(io::Error::other(
-            "leader-side write replication not yet implemented",
-        )));
+        todo!()
     }
 
     async fn last_log_id(&self) -> LogId {
@@ -522,8 +517,8 @@ mod tests {
     use super::*;
     use crate::append_reply::AppendReply;
     use crate::append_request::AppendRequest;
-    use crate::clock_storage::TermArray;
-    use crate::history_storage::CmdArray;
+    use crate::cmd_array::CmdArray;
+    use crate::term_array::TermArray;
 
     struct NoopNetwork;
 

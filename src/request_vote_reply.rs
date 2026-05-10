@@ -8,22 +8,19 @@ use crate::log_id::LogId;
 /// Carries the responder's local state regardless of whether the
 /// vote was granted. When `granted == false`, the candidate
 /// compares its own values against the reply to determine which
-/// condition caused the rejection — an occupied `leader_index`, or
-/// a stale `accepted` cursor. See `DESIGN.md` §7.1 and §8.3.
+/// condition caused the rejection: a stale term or a stale log id.
+/// See `DESIGN.md` §7.1 and §8.3.
 #[derive(Debug, Clone)]
 pub struct RequestVoteReply {
     /// Whether the responder granted the vote.
     pub granted: bool,
 
-    /// The responder's most-recently-seen leader_index — the
-    /// identity of the most recent leader the responder is aware
-    /// of. If `granted` is false because the candidate's
-    /// `leader_index` was already occupied or was not higher than
-    /// this value, the candidate uses this to skip ahead.
+    /// The responder's current term-array length. If the candidate
+    /// is behind, it can use this to skip to a newer slot.
     pub term_len: LogIndex,
 
     /// The responder's local last log id. Used by the candidate as
     /// the freshness comparator if the vote was rejected on freshness
     /// grounds.
-    pub last_history: LogId,
+    pub last_log_id: LogId,
 }

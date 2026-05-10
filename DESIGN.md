@@ -68,7 +68,7 @@ leader 之后追加的新日志项都使用同一个 `leader.term`。
 |---|---|
 | `granted` | 是否投票给候选人。 |
 | `term_len` | responder 当前 `terms` 长度。候选人可用它判断自己是否落后。 |
-| `last_history` | responder 的最后一条日志身份。候选人可用它判断日志 freshness 失败原因。 |
+| `last_log_id` | responder 的最后一条日志身份。候选人可用它判断日志 freshness 失败原因。 |
 
 ### Append
 

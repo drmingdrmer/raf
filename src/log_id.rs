@@ -8,7 +8,7 @@ pub struct LogId {
 }
 
 impl LogId {
-    pub fn new(clock: Term, index: LogIndex) -> Self {
-        Self { term: clock, index }
+    pub fn new(term: Term, index: LogIndex) -> Self {
+        Self { term, index }
     }
 }

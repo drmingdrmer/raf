@@ -12,11 +12,11 @@ use crate::Membership;
 use crate::NodeId;
 use crate::WriteReply;
 use crate::WriteRequest;
-use crate::clock_storage::TermArray;
 use crate::core::Core;
+use crate::cmd_array::CmdArray;
 use crate::event::Event;
-use crate::history_storage::CmdArray;
 use crate::network::Network;
+use crate::term_array::TermArray;
 use crate::request_vote::RequestVote;
 use crate::request_vote_reply::RequestVoteReply;
 

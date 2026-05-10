@@ -22,11 +22,10 @@ use crate::ReplicationState;
 #[derive(Debug)]
 #[allow(dead_code)]
 pub(crate) struct LeaderState {
-    /// The candidate's chosen leader_index — its identity for this
-    /// election.
+    /// The candidate's chosen leader term.
     pub term: u64,
 
-    /// Node IDs that have granted votes for `leader_index`,
+    /// Node IDs that have granted votes for this term,
     /// including this node itself. Granting is monotone: a peer
     /// is added on the first granted reply and never removed.
     pub granted_votes: HashSet<NodeId>,

@@ -1,14 +1,9 @@
-//! Persistent state interface for a `raf` node.
-//!
-//! `raf` does not store log payloads — only a sequence of opaque 64-bit
-//! identifiers (the *log identity*). The application is responsible
-//! for mapping each identifier to its payload and persisting that
-//! mapping in its own storage. See `DESIGN.md` §6.
+//! In-memory command sequence for a `raf` node.
 
 use std::ops::Range;
 
 use crate::Cmd;
-use crate::log_state::CmdChunk;
+use crate::cmd_chunk::CmdChunk;
 
 pub struct CmdArray {
     cmds: Vec<Cmd>,
