@@ -5,7 +5,6 @@
 //! log-matching guarantees. See `DESIGN.md` at the repository root for
 //! the full design.
 
-mod accepted_content;
 mod append_reply;
 mod append_request;
 mod array_chunk;
@@ -29,7 +28,6 @@ mod term;
 mod write_reply;
 mod write_request;
 
-pub use self::accepted_content::AcceptedContent;
 pub use self::append_reply::AppendReply;
 pub use self::append_request::AppendRequest;
 pub use self::array_chunk::ArrayChunk;
