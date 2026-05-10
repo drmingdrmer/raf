@@ -42,6 +42,7 @@ pub(crate) struct LeaderState {
     /// may serve application writes.
     pub established: bool,
 
+    /// Replication state for every node, including the leader itself.
     pub replications: BTreeMap<NodeId, ReplicationState>,
 
     pub committed: u64,

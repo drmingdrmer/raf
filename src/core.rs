@@ -131,12 +131,14 @@ where N: Network
 
     async fn do_elect(&mut self) -> Result<(), io::Error> {
         let term = self.terms.terms_len();
+        let mut replications = BTreeMap::new();
+        replications.insert(self.id, ReplicationState::new(self.id, self.cmds.cmds_len()));
 
         self.leader = Some(LeaderState {
             term: self.terms.terms_len(),
             granted_votes: std::iter::once(self.id).collect(), // grant self vote
             established: false,
-            replications: Default::default(),
+            replications,
             committed: 0,
             pending_writes: Default::default(),
         });
@@ -278,6 +280,11 @@ where N: Network
         // Occupy all entries with no-op Cmd.
         let cmds = vec![Cmd::empty(); n as usize];
         self.cmds.append_cmds(cmds);
+
+        if let Some(replication) = leader.replications.get_mut(&self.id) {
+            replication.matched = self.cmds.cmds_len() - 1;
+            replication.end = self.cmds.cmds_len();
+        }
     }
 
     async fn try_initialize_replication(&mut self) {
@@ -292,6 +299,10 @@ where N: Network
         let sending_term = leader.term;
 
         for replication in leader.replications.values_mut() {
+            if replication.target == self.id {
+                continue;
+            }
+
             let permit = replication.inflight.clone().try_acquire_owned();
 
             let permit = match permit {
@@ -518,7 +529,12 @@ where N: Network
         self.terms.update_terms(self.cmds.cmds_len(), &[leader.term]);
         self.cmds.append_cmds(vec![Cmd::empty()]);
 
-        leader.pending_writes.push_back((self.cmds.cmds_len() - 1, reply_tx));
+        let index = self.cmds.cmds_len() - 1;
+        if let Some(replication) = leader.replications.get_mut(&self.id) {
+            replication.matched = index;
+            replication.end = self.cmds.cmds_len();
+        }
+        leader.pending_writes.push_back((index, reply_tx));
     }
 
     async fn last_log_id(&self) -> LogId {

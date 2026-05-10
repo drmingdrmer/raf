@@ -12,7 +12,11 @@ pub struct TermArray {
 }
 
 impl TermArray {
-    pub fn new(terms: Vec<Term>) -> Self {
+    pub fn new(mut terms: Vec<Term>) -> Self {
+        if terms.is_empty() {
+            terms.push(0);
+        }
+
         Self { terms }
     }
 
@@ -22,8 +26,9 @@ impl TermArray {
 
     // fill term `index` for entry `index` for `[since, len)`
     pub fn fill_terms_gap(&mut self, since: u64) {
-        for i in since..self.terms_len() {
-            self.terms.push(i);
+        let start = since.min(self.terms_len()) as usize;
+        for index in start..self.terms.len() {
+            self.terms[index] = index as Term;
         }
     }
 

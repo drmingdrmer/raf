@@ -10,7 +10,11 @@ pub struct CmdArray {
 }
 
 impl CmdArray {
-    pub fn new(cmds: Vec<Cmd>) -> Self {
+    pub fn new(mut cmds: Vec<Cmd>) -> Self {
+        if cmds.is_empty() {
+            cmds.push(Cmd::empty());
+        }
+
         Self { cmds }
     }
 
