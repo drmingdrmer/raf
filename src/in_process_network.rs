@@ -39,13 +39,13 @@ impl InProcessNetwork {
 
     /// Register or replace the [`Raf`] handle for `target`.
     pub fn insert(&self, target: NodeId, raf: Raf) -> io::Result<Option<Raf>> {
-        let mut routes = self.routes.write().map_err(|_| Self::poisoned_routes_error())?;
+        let mut routes = self.routes.write().unwrap();
 
         Ok(routes.insert(target, raf))
     }
 
     fn target_handle(&self, target: NodeId) -> io::Result<Raf> {
-        let routes = self.routes.read().map_err(|_| Self::poisoned_routes_error())?;
+        let routes = self.routes.read().unwrap();
 
         routes.get(&target).cloned().ok_or_else(|| {
             io::Error::new(
@@ -53,10 +53,6 @@ impl InProcessNetwork {
                 format!("target node {target} is not registered"),
             )
         })
-    }
-
-    fn poisoned_routes_error() -> io::Error {
-        io::Error::other("InProcessNetwork route table lock poisoned")
     }
 }
 
