@@ -203,7 +203,7 @@ where N: Network
     async fn handle_request_vote(&mut self, req: RequestVote) -> Result<RequestVoteReply, io::Error> {
         let local_last = self.terms.last();
 
-        let local_cmds_len = self.cmds.len();
+        let local_cmds_len = self.cmds.cmds_len();
         let local_last_cmd_term = self.terms.read_one(local_cmds_len - 1);
         let local_last_log_id = LogId::new(local_last_cmd_term, local_cmds_len - 1);
 
@@ -264,7 +264,7 @@ where N: Network
         let leader = self.leader.as_mut().unwrap();
         leader.established = true;
 
-        let cmds_len = self.cmds.len();
+        let cmds_len = self.cmds.cmds_len();
 
         for target in self.membership.node_ids().iter().cloned() {
             if target == self.id {
@@ -276,14 +276,14 @@ where N: Network
             leader.replications.insert(target, replication);
         }
 
-        let cmds_len = self.cmds.len();
+        let cmds_len = self.cmds.cmds_len();
         let n = self.terms.len() - cmds_len;
 
         self.terms.fill_gap(cmds_len);
 
         // Occupy all entries with no-op Cmd.
         let cmds = vec![Cmd::empty(); n as usize];
-        self.cmds.append(cmds);
+        self.cmds.append_cmds(cmds);
     }
 
     async fn try_initialize_replication(&mut self) {
@@ -314,7 +314,7 @@ where N: Network
 
             // includes the last matched, will be used in the role of `prev`
             let terms = self.terms.read(start..start + len).entries;
-            let cmds = self.cmds.read(start..start + len).entries;
+            let cmds = self.cmds.read_cmds(start..start + len).entries;
 
             let append_request = AppendRequest {
                 term: leader.term,
@@ -361,7 +361,7 @@ where N: Network
 
         let start = append.assume_matched_at;
         let end = append.assume_matched_at + append.terms.len() as u64;
-        let end = end.min(self.cmds.len());
+        let end = end.min(self.cmds.cmds_len());
 
         // find the matches
 
@@ -385,14 +385,14 @@ where N: Network
         };
 
         if last_matched < end - 1 {
-            self.cmds.truncate(last_matched + 1);
+            self.cmds.truncate_cmds(last_matched + 1);
         }
 
         self.terms.update(append.assume_matched_at, &append.terms);
 
-        let append_from = self.cmds.len().saturating_sub(append.assume_matched_at) as usize;
+        let append_from = self.cmds.cmds_len().saturating_sub(append.assume_matched_at) as usize;
         if append_from < append.cmds.len() {
-            self.cmds.append(append.cmds[append_from..].to_vec());
+            self.cmds.append_cmds(append.cmds[append_from..].to_vec());
         }
 
         Ok(AppendReply {
@@ -503,7 +503,7 @@ where N: Network
     }
 
     async fn last_log_id(&self) -> LogId {
-        let cmds_len = self.cmds.len();
+        let cmds_len = self.cmds.cmds_len();
 
         let index = cmds_len - 1;
 
@@ -566,7 +566,7 @@ mod tests {
         let reply = core.handle_append(append).await.unwrap();
 
         assert_eq!(core.terms.len(), 4);
-        assert_eq!(core.cmds.len(), 4);
+        assert_eq!(core.cmds.cmds_len(), 4);
         assert_eq!(reply.matched.unwrap(), LogId::new(1, 3));
 
         let append = AppendRequest {
@@ -579,7 +579,7 @@ mod tests {
         let reply = core.handle_append(append).await.unwrap();
 
         assert_eq!(core.terms.len(), 4);
-        assert_eq!(core.cmds.len(), 4);
+        assert_eq!(core.cmds.cmds_len(), 4);
         assert_eq!(reply.matched.unwrap(), LogId::new(1, 3));
     }
 
