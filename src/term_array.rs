@@ -57,6 +57,6 @@ impl TermArray {
     }
 
     pub fn last_term(&self) -> Term {
-        self.terms.last().unwrap().clone()
+        *self.terms.last().unwrap()
     }
 }

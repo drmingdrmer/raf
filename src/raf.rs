@@ -12,13 +12,13 @@ use crate::Membership;
 use crate::NodeId;
 use crate::WriteReply;
 use crate::WriteRequest;
-use crate::core::Core;
 use crate::cmd_array::CmdArray;
+use crate::core::Core;
 use crate::event::Event;
 use crate::network::Network;
-use crate::term_array::TermArray;
 use crate::request_vote::RequestVote;
 use crate::request_vote_reply::RequestVoteReply;
+use crate::term_array::TermArray;
 
 /// A running `raf` node.
 ///
