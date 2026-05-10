@@ -698,22 +698,22 @@ workspace sub-crates.
 
 - One singleton instance per wrapped node, owned by an internal task.
 - Runs an event loop pulling events from a single mailbox.
-- An event is one of: an inbound network message, an inbound network
-  response, or an application command from a `Handle`. Inbound RPC
-  events carry the means to reply inline so the transport that
-  received the wire-level RPC can forward the response back to the
-  calling peer.
+- An event is one of: an inbound RPC (`RequestVote`, `Append`), a
+  reply to an outbound RPC (`RequestVoteReply`, `AppendReply`), an
+  application command (`Write`), or an internal trigger (`Elect`).
+  Inbound RPC and application events carry a oneshot reply channel
+  so the Core can produce replies inline.
 - Replies are produced inline within the same loop, mirroring
   openraft's `RaftCore`.
-- **No in-memory mirror of log state.** Every handler reads `len`,
-  the accepted cursor, the last leader index, and any entries from
-  `Storage` on demand (see §6.2). Trades performance for
-  simplicity; an experimental-scope choice.
+- **Holds the term and cmd sequences directly in memory.** They
+  are concrete in-process structures — there is no `Storage` trait
+  abstraction at present (§15.1.4). Every handler reads from and
+  writes to these sequences directly.
 - **Holds in-memory leader state** when the node is a candidate or
-  established leader (§8.4): the candidate `leader_index`, the
-  running tally of granted votes, and the `established` flag.
-  Leader state is transient by design — it does not need to survive
-  restart.
+  established leader (§8.4): the term, the granted-vote tally, the
+  `established` flag, the per-peer replication state, and the
+  committed index. Leader state is transient by design — it does
+  not need to survive restart.
 
 #### 15.1.2 Handle (Control Handle)
 
@@ -727,51 +727,47 @@ workspace sub-crates.
 
 #### 15.1.3 Network
 
-- A single instance held by the Core, behind a cheap-clone shared
-  handle. **No per-replicator parallel task** — the main runtime
-  difference from openraft.
-- All outbound traffic flows through this one object. The Core may
-  clone the handle into a spawned subtask when it wants an outbound
-  RPC to run in parallel with the event loop (e.g. fan-out
-  `RequestVote` to all peers); the cheap clone is what makes that
-  pattern free.
-- Pattern: the Core sends an outbound RPC and receives the reply
-  directly from the same call. Outbound replies do **not** loop
-  back through the Core's mailbox. **Inbound RPCs *from* peers do
-  arrive through the mailbox** (§7) — the asymmetry is deliberate:
-  the Core's loop is already waiting on the mailbox, so routing
-  inbound RPCs there is free; outbound calls are cleaner as
-  direct awaits.
+- A single instance held by the Core, behind an `Arc` so outbound
+  RPCs can be cloned into spawned subtasks. **No per-replicator
+  parallel task** — the main runtime difference from openraft.
+- Two outbound RPCs are exposed so far: `request_vote` (§7.1) and
+  `append` (§7.2). More will be added as the protocol fills in.
+- Pattern: the Core spawns an outbound RPC, awaits the reply on
+  the spawned task, and posts the reply back to its own mailbox
+  as a `*Reply` event (so the main loop can process the reply
+  with full mailbox-ordered semantics). **Inbound RPCs *from*
+  peers also arrive through the mailbox** (§7) — both directions
+  flow through the Core's mailbox, but only the inbound direction
+  carries an inline reply channel.
 
 #### 15.1.4 Storage
 
-- Pluggable durability layer for the persistent log values (§6.2,
-  §6.3). The application supplies an implementation; `raf` is
-  agnostic to the backend.
-- Single source of truth for all protocol state. The Core consults
-  `Storage` on every read and write — there is no in-memory mirror
-  (see §6.2 and §15.1.1).
-- Storage failures are I/O failures; there is no associated error
-  type.
+A pluggable durability layer is anticipated but **not yet
+present**. The current draft holds the term and cmd sequences as
+concrete in-memory structures owned by the Core (§15.1.1); a
+restart is not yet survivable. Once the protocol is fully fleshed
+out, a storage abstraction will be reintroduced so application-
+supplied backends can persist these sequences.
 
 ### 15.3 Construction
 
-```rust
-let raf = Raf::new(storage, network);
-let handle = raf.handle();
-```
-
-`Raf::new` spawns the Core task; the returned `Raf` exposes
-`handle()` to produce cheap-clone `Handle`s.
+The top-level entry point spawns the Core task and exposes
+cheap-clone `Handle`s for the application and inbound transport.
+Construction takes the node's identity, the cluster membership,
+the in-memory term and cmd sequences, and a `Network`
+implementation. The exact constructor signature is the source of
+truth (see `src/raf.rs`).
 
 ### 15.4 Differences From openraft
 
 | Aspect | openraft | raf |
 |---|---|---|
-| Log id | `(term, node_id, log_index)` | (no term — TBD) |
+| Log id | `(term, node_id, log_index)` | `(term, log_index)` — standard Raft shape |
 | Replication driver | per-target task running in parallel with `RaftCore` | single Network instance, all I/O via Core mailbox |
 | Network trait | per-target factory + per-target send | one singleton |
+| Replication probe | dedicated `next_index` walk | bisection-based `Append` window (§9.2.2) |
 | Snapshots | supported | out of scope |
 | Membership changes | supported | out of scope |
 | State machine | required (`RaftStateMachine` trait) | not part of `raf`; application owns log application |
+| Persistent storage | pluggable trait | not yet present (§15.1.4) |
 
