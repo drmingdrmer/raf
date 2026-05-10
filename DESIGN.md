@@ -15,10 +15,15 @@ conversation. It will grow and be reorganized as the picture fills in.
 ## 2. Goals
 
 - **Log replication.** Implement Raft-style log replication that
-  preserves leader uniqueness and log-matching, but without the term
-  as an explicit field. Output: a durably ordered, committed sequence
-  of `u64` log identities. The application owns payload storage and
-  payload application; no state machine is part of `raf` (see §6).
+  preserves leader uniqueness and log-matching. Output: a durably
+  ordered, committed sequence of log entries, each identified by a
+  `(Term, LogIndex)` pair (a `LogId`) and carrying an opaque `Cmd`
+  payload. The application interprets `Cmd`; no state machine is
+  part of `raf` (see §6).
+- **Term-as-implementation-detail.** The term is retained as an
+  internal mechanism (for now) but the long-term design intent is
+  to keep its surface minimal — the log identity exposed to the
+  application is the `(Term, LogIndex)` pair, not the term alone.
 
 ## 3. Non-Goals
 
