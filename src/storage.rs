@@ -21,6 +21,20 @@ pub trait StorageExt: Storage {
         async move { self.read_terms(range).await.len }
     }
 
+    async fn last_term(&self) -> Term {
+        let len = self.terms_len().await;
+        self.read_terms(len - 1..len).await.entries.last().cloned().unwrap_or(0)
+    }
+
+    async fn read_one_term(&self, index: u64) -> Term {
+        self.read_terms(index..index + 1).await.entries[0]
+    }
+
+    async fn fill_terms_gap(&mut self, since: u64) {
+        let len = self.terms_len().await;
+        for index in since
+    }
+
     fn cmds_len(&self) -> impl Future<Output = u64> + Send {
         let range = 0..0;
         async move { self.read_cmds(range).await.len }

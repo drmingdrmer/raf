@@ -141,7 +141,7 @@ where
             pending_writes: Default::default(),
         });
 
-        self.storage.update_terms(term, &[term]);
+        self.storage.update_terms(term, &[term]).await;
 
         self.spawn_request_vote_rpcs(term).await?;
 
@@ -194,11 +194,11 @@ where
     ///    stored or reserved.
     /// 2. `req.last_log_id > local.last_log_id` — the candidate's history is fresher than ours.
     async fn handle_request_vote(&mut self, req: RequestVote) -> Result<RequestVoteReply, io::Error> {
-        let local_term_len = self.terms.terms_len();
-        let local_last_term = self.terms.last_term();
+        let local_term_len = self.storage.terms_len().await;
+        let local_last_term = self.storage.last_term().await;
 
-        let local_cmds_len = self.cmds.cmds_len();
-        let local_last_cmd_term = self.terms.read_one_term(local_cmds_len - 1);
+        let local_cmds_len = self.storage.cmds_len().await;
+        let local_last_cmd_term = self.storage.read_one_term(local_cmds_len - 1).await;
         let local_last_log_id = LogId::new(local_last_cmd_term, local_cmds_len - 1);
 
         if req.term < local_last_term {
@@ -220,7 +220,7 @@ where
         // reset all leader or candidate
         self.leader = None;
 
-        let _len = self.terms.update_terms(local_term_len, &[req.term]);
+        let _len = self.storage.update_terms(local_term_len, &[req.term]).await;
 
         Ok(RequestVoteReply {
             granted: true,
@@ -258,7 +258,7 @@ where
         let leader = self.leader.as_mut().unwrap();
         leader.established = true;
 
-        let cmds_len = self.cmds.cmds_len();
+        let cmds_len = self.storage.cmds_len().await;
 
         for target in self.membership.node_ids().iter().cloned() {
             if target == self.id {
@@ -270,10 +270,10 @@ where
             leader.replications.insert(target, replication);
         }
 
-        let cmds_len = self.cmds.cmds_len();
-        let n = self.terms.terms_len() - cmds_len;
+        let cmds_len = self.storage.cmds_len().await;
+        let n = self.storage.terms_len().await - cmds_len;
 
-        self.terms.fill_terms_gap(cmds_len);
+        self.storage.fill_terms_gap(cmds_len).await;
 
         // Occupy all entries with no-op Cmd.
         let cmds = vec![Cmd::empty(); n as usize];
