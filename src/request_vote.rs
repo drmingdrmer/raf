@@ -7,8 +7,8 @@
 //! compare freshness against their own state. See `DESIGN.md`
 //! §7.1 and §8.
 
-use crate::clock::Clock;
-use crate::hisotory_id::HistoryId;
+use crate::log_id::LogId;
+use crate::term::Term;
 
 /// Leader-election request, modeled on Raft's `RequestVote` RPC.
 ///
@@ -22,7 +22,7 @@ use crate::hisotory_id::HistoryId;
 pub struct RequestVote {
     /// The candidate's chosen leader identity — the next index past
     /// the end of its local log.
-    pub clock: Clock,
+    pub clock: Term,
 
-    pub last_history: HistoryId,
+    pub last_history: LogId,
 }

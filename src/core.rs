@@ -10,16 +10,16 @@ use tokio::sync::mpsc::unbounded_channel;
 use tokio::sync::oneshot;
 
 use crate::AppendReply;
-use crate::Clock;
 use crate::Cmd;
 use crate::Membership;
 use crate::NodeId;
 use crate::ReplicationState;
+use crate::Term;
 use crate::append_request::AppendRequest;
 use crate::clock_storage::TermArray;
-use crate::hisotory_id::HistoryId;
 use crate::history_storage::CmdArray;
 use crate::leader_state::LeaderState;
+use crate::log_id::LogId;
 use crate::network::Network;
 use crate::request_vote::RequestVote;
 use crate::request_vote_reply::RequestVoteReply;
@@ -42,8 +42,20 @@ pub(crate) enum Event {
         reply_tx: oneshot::Sender<RequestVoteReply>,
     },
     RequestVoteReply {
+        sending_term: Term,
+        target: NodeId,
         reply: RequestVoteReply,
     },
+    Append {
+        req: AppendRequest,
+        reply_tx: oneshot::Sender<AppendReply>,
+    },
+    AppendReply {
+        sending_term: Term,
+        target: NodeId,
+        reply: AppendReply,
+    },
+
     /// Application write request submitted via
     /// [`crate::Handle::write`] — handled per `DESIGN.md` §9.
     /// Only an established leader produces an `Ok` reply; everyone
@@ -57,9 +69,9 @@ pub(crate) enum Event {
 pub(crate) struct Core<N>
 where N: Network
 {
-    clock_storage: TermArray,
+    term_storage: TermArray,
 
-    history: CmdArray,
+    cmds: CmdArray,
 
     /// Held in `Arc` so outbound RPCs can be cloned into spawned
     /// tasks (see `DESIGN.md` §15.1.3).
@@ -84,13 +96,22 @@ where N: Network
 {
     /// Spawn the Core onto the current Tokio runtime; return a sender
     /// to its mailbox.
-    pub(crate) fn spawn(clock_storage: TermArray, storage: CmdArray, network: Arc<N>) -> UnboundedSender<Event> {
+    pub(crate) fn spawn(
+        id: NodeId,
+        membership: Membership,
+        term_storage: TermArray,
+        storage: CmdArray,
+        network: Arc<N>,
+    ) -> UnboundedSender<Event> {
         let (tx, rx) = unbounded_channel();
         let core = Self {
-            clock_storage,
-            history: storage,
+            term_storage,
+            cmds: storage,
             network,
+            id,
+            membership,
             leader: None,
+            mailbox_tx: tx.clone(),
             mailbox: rx,
         };
         tokio::spawn(core.run());
@@ -112,6 +133,13 @@ where N: Network
                 Event::Write { req, reply_tx } => {
                     self.handle_write(req, reply_tx).await;
                 }
+                Event::RequestVoteReply {
+                    sending_term,
+                    target,
+                    reply,
+                } => {
+                    self.handle_request_vote_reply(sending_term, target, reply).await;
+                }
             }
         }
 
@@ -123,15 +151,15 @@ where N: Network
     }
 
     async fn do_elect(&mut self) -> Result<(), io::Error> {
-        let clock = self.clock_storage.len();
+        let clock = self.term_storage.len();
 
         self.leader = Some(LeaderState {
-            clock: self.clock_storage.len(),
+            term: self.term_storage.len(),
             granted_votes: std::iter::once(0).collect(), // grant self vote
             established: false,
         });
 
-        self.clock_storage.update(clock, &[clock]);
+        self.term_storage.update(clock, &[clock]);
 
         self.spawn_request_vote_rpcs(clock).await?;
 
@@ -184,15 +212,15 @@ where N: Network
     /// 2. `req.accepted >= log.accepted` — lex-compared on `(leader_index, index)`; the candidate
     ///    is at least as up-to-date as we are (§6.3).
     async fn handle_request_vote(&mut self, req: RequestVote, reply_tx: oneshot::Sender<RequestVoteReply>) {
-        let local_clock_len = self.clock_storage.len();
-        let local_history_len = self.history.len();
-        let local_last_history_clock = self.clock_storage.read_one(local_clock_len - 1).unwrap();
-        let local_last_history_id = HistoryId::new(local_last_history_clock, local_history_len - 1);
+        let local_clock_len = self.term_storage.len();
+        let local_history_len = self.cmds.len();
+        let local_last_history_clock = self.term_storage.read_one(local_clock_len - 1).unwrap();
+        let local_last_history_id = LogId::new(local_last_history_clock, local_history_len - 1);
 
         if req.clock < local_clock_len {
             let _ = reply_tx.send(RequestVoteReply {
                 granted: false,
-                clock_len: local_clock_len,
+                term_len: local_clock_len,
                 last_history: local_last_history_id,
             });
             return;
@@ -201,7 +229,7 @@ where N: Network
         if req.last_history <= local_last_history_id {
             let _ = reply_tx.send(RequestVoteReply {
                 granted: false,
-                clock_len: local_clock_len,
+                term_len: local_clock_len,
                 last_history: local_last_history_id,
             });
             return;
@@ -210,24 +238,24 @@ where N: Network
         // reset all leader or candidate
         self.leader = None;
 
-        let _len = self.clock_storage.update(local_clock_len, &[req.clock]);
+        let _len = self.term_storage.update(local_clock_len, &[req.clock]);
 
         let _ = reply_tx.send(RequestVoteReply {
             granted: true,
-            clock_len: local_clock_len,
+            term_len: local_clock_len,
             last_history: local_last_history_id,
         });
     }
 
     async fn handle_request_vote_reply(
         &mut self,
-        sending_clock: Clock,
+        sending_term: Term,
         target: NodeId,
         reply: RequestVoteReply,
     ) -> Option<()> {
         let leader = self.leader.as_mut()?;
 
-        if leader.clock != sending_clock {
+        if leader.term != sending_term {
             return None;
         }
 
@@ -239,6 +267,7 @@ where N: Network
             }
         } else {
             self.leader = None;
+            // TODO: save max-term-len
         }
         None
     }
@@ -247,75 +276,89 @@ where N: Network
         let leader = self.leader.as_mut().unwrap();
         leader.established = true;
 
-        let history_len = self.history.len();
+        let cmds_len = self.cmds.len();
 
         for target in self.membership.node_ids().iter().cloned() {
             if target == self.id {
                 continue;
             }
 
-            let replication = ReplicationState::new(target, history_len);
+            let replication = ReplicationState::new(target, cmds_len);
 
             leader.replications.insert(target, replication);
         }
 
-        let n = self.clock_storage.len() - self.history.len();
-        // create a vec of Cmds of length n, with each Cmd being a No-op
+        let cmds_len = self.cmds.len();
+        let n = self.term_storage.len() - cmds_len;
+
+        self.term_storage.fill_gap(cmds_len);
+
+        // Occupy all entries with no-op Cmd.
         let cmds = vec![Cmd::empty(); n as usize];
-        self.history.append(cmds);
+        self.cmds.append(cmds);
 
         self.try_initialize_replication().await;
     }
 
     async fn try_initialize_replication(&mut self) {
         let leader = self.leader.as_mut().unwrap();
+        let sending_term = leader.term;
 
         for replication in leader.replications.values_mut() {
-            let permit = replication.inflight.try_acquire();
+            let permit = replication.inflight.clone().try_acquire_owned();
 
             let permit = match permit {
                 Ok(permit) => permit,
                 Err(_) => continue, // already inflight; skip
             };
 
-            let start = (replication.start + replication.end) / 2;
+            let start = (replication.matched + replication.end) / 2;
             let len = 64;
             let net = self.network.clone();
             let tx = self.mailbox_tx.clone();
 
-            let clocks = self.clock_storage.read(start..start + len);
-            let histories = self.history.read(start..start + len);
+            // TODO: len should not exceed cmds.len()
 
-            let payloads = clocks
-                .entries
-                .into_iter()
-                .zip(histories.entries.into_iter())
-                .enumerate()
-                .map(|(i, (cmd, clock))| ((start + i) as u64, cmd, clock))
-                .collect::<Vec<_>>();
+            // includes the last matched, will be used in the role of `prev`
+            let terms = self.term_storage.read(start..start + len).entries;
+            let cmds = self.cmds.read(start..start + len).entries;
 
-            let append_request = AppendRequest { payloads };
+            let append_request = AppendRequest {
+                term: leader.term,
+                assume_matched_at: start,
+                terms,
+                cmds,
+            };
+            let target = replication.target;
 
             tokio::spawn(async move {
-                let _x = permit;
+                let _permit = permit;
 
-                let reply = net.append(replication.target, append_request).await;
+                let reply = net.append(target, append_request).await;
+                let Ok(reply) = reply else {
+                    eprintln!("failed to send Append to peer {}: {}", target, reply.err().unwrap());
+                    return;
+                };
+
                 tx.send(Event::AppendReply {
-                    target: replication.target,
+                    sending_term,
+                    target,
                     reply,
                 })
+                .ok();
             });
         }
     }
 
     async fn handle_append(&mut self, append: AppendRequest) -> Result<AppendReply, io::Error> {
         //
-        let (index, my_clock) = self.clock_storage.last();
-        if append.clock > my_clock {
-            self.clock_storage.update(append.clock, &[append.clock]);
-        } else if append.clock < my_clock {
+        let (_index, my_term) = self.term_storage.last();
+        if append.term > my_term {
+            // TODO: save last-seen, instead of update storage. updating storage means accept a
+            // request-vote. self.term_storage.update(append.term, &[append.term]);
+        } else if append.term < my_term {
             return Ok(AppendReply {
-                clock: my_clock,
+                term: my_term,
                 matched: None,
                 conflict: None,
             });
@@ -323,24 +366,105 @@ where N: Network
             // equal
         }
 
-        let local = self.clock_storage.read_one(append.clock);
-        if append.payloads[0].0 != local {
-            if append.since > 0 {
-                self.history.truncate(append.since - 1);
-            }
+        let start = append.assume_matched_at;
+        let end = append.assume_matched_at + append.terms.len() as u64;
+        let end = end.min(self.cmds.len());
 
-            return Ok(AppendReply {
-                clock: my_clock,
-                matched: None,
-                conflict: Some(append.clock),
-            });
+        // find the matches
+
+        let local_terms = self.term_storage.read(start..end).entries;
+        let mut last_matched = None;
+
+        for i in start..end {
+            if local_terms[(i - start) as usize] == append.terms[(i - start) as usize] {
+                last_matched = Some(i);
+            } else {
+                break;
+            }
         }
 
-        let clocks = append.payloads.iter().map(|(clock, _)| *clock).collect::<Vec<_>>();
-        let cmds = append.payloads.iter().map(|(_, cmd)| cmd.clone()).collect::<Vec<_>>();
+        let Some(last_matched) = last_matched else {
+            return Ok(AppendReply {
+                term: my_term,
+                matched: None,
+                conflict: Some(start),
+            });
+        };
 
-        self.clock_storage.update(append.since, &clocks);
-        self.history.append(cmds);
+        if last_matched < end - 1 {
+            self.cmds.truncate(last_matched + 1);
+        }
+
+        self.term_storage.update(append.assume_matched_at, &append.terms);
+        self.cmds.append(append.cmds);
+
+        Ok(AppendReply {
+            term: my_term,
+            matched: Some(LogId::new(
+                append.terms.last().unwrap().clone(),
+                append.assume_matched_at + append.terms.len() as u64 - 1,
+            )),
+            conflict: None,
+        })
+    }
+
+    async fn handle_append_reply(&mut self, sending_term: Term, target: NodeId, reply: AppendReply) {
+        let Some(leader) = self.leader.as_mut() else {
+            return;
+        };
+
+        if leader.term != sending_term {
+            return;
+        }
+
+        if reply.term > leader.term {
+            // TODO: save last seen
+            self.leader = None;
+            return;
+        }
+
+        let Some(replication) = leader.replications.get_mut(&target) else {
+            // target is removed.
+            return;
+        };
+
+        if let Some(conflict) = reply.conflict {
+            replication.end = conflict;
+            return;
+        }
+
+        if let Some(matched) = reply.matched {
+            replication.matched = matched.index;
+
+            self.try_update_committed().await;
+        }
+    }
+
+    async fn try_update_committed(&mut self) {
+        let Some(leader) = self.leader.as_mut() else {
+            return;
+        };
+
+        let mut match_indices = leader
+            .replications
+            .values()
+            .filter(|r| r.matched >= leader.term)
+            .map(|r| (r.matched, r.target))
+            .collect::<Vec<_>>();
+        match_indices.sort_unstable();
+
+        let mut committed = 0;
+        while !match_indices.is_empty() {
+            let node_ids = match_indices.iter().map(|(_, id)| *id).collect::<Vec<_>>();
+
+            if self.membership.is_quorum(&node_ids) {
+                committed = match_indices[0].0;
+            }
+        }
+
+        if committed > leader.committed {
+            leader.committed = committed;
+        }
     }
 
     /// Handle an application write request per `DESIGN.md` §9.
@@ -375,12 +499,12 @@ where N: Network
         )));
     }
 
-    async fn last_history_id(&self) -> HistoryId {
-        let history_len = self.history.len();
+    async fn last_history_id(&self) -> LogId {
+        let history_len = self.cmds.len();
 
         let index = history_len - 1;
 
-        let last_history_clock = self.clock_storage.read_one(index).unwrap();
-        HistoryId::new(last_history_clock, index)
+        let last_history_clock = self.term_storage.read_one(index).unwrap();
+        LogId::new(last_history_clock, index)
     }
 }

@@ -10,7 +10,7 @@ use std::io;
 use std::ops::Range;
 
 use crate::Cmd;
-use crate::hisotory_id::HistoryId;
+use crate::log_id::LogId;
 use crate::log_state::CmdChunk;
 
 pub struct CmdArray {
@@ -95,7 +95,7 @@ pub trait HistoryStorage: Send + Sync + 'static {
     /// §6.4).
     fn read(&self, range: Range<u64>) -> impl Future<Output = io::Result<HistoryState>> + Send;
 
-    fn last(&self) -> impl Future<Output = io::Result<Option<HistoryId>>> + Send {
+    fn last(&self) -> impl Future<Output = io::Result<Option<LogId>>> + Send {
         async move {
             let state = self.read(0..0).await?;
             if state.len == 0 {

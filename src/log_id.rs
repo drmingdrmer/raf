@@ -1,14 +1,14 @@
-use crate::Clock;
-use crate::Index;
+use crate::LogIndex;
+use crate::Term;
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub struct LogId {
-    pub clock: Clock,
-    pub index: Index,
+    pub clock: Term,
+    pub index: LogIndex,
 }
 
 impl LogId {
-    pub fn new(clock: Clock, index: Index) -> Self {
+    pub fn new(clock: Term, index: LogIndex) -> Self {
         Self { clock, index }
     }
 }

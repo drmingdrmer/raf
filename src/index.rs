@@ -1,1 +1,1 @@
-pub type Index = u64;
+pub type LogIndex = u64;

@@ -10,6 +10,7 @@ use std::collections::BTreeMap;
 use std::collections::HashSet;
 
 use crate::NodeId;
+use crate::ReplicationState;
 
 /// Election / leadership state.
 ///
@@ -23,7 +24,7 @@ use crate::NodeId;
 pub(crate) struct LeaderState {
     /// The candidate's chosen leader_index — its identity for this
     /// election.
-    pub clock: u64,
+    pub term: u64,
 
     /// Node IDs that have granted votes for `leader_index`,
     /// including this node itself. Granting is monotone: a peer
@@ -37,4 +38,6 @@ pub(crate) struct LeaderState {
     pub established: bool,
 
     pub replications: BTreeMap<NodeId, ReplicationState>,
+
+    pub committed: u64,
 }

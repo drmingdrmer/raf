@@ -1,9 +1,10 @@
-use crate::Clock;
-use crate::Index;
-use crate::hisotory_id::HistoryId;
+use crate::LogIndex;
+use crate::Term;
+use crate::log_id::LogId;
 
 pub struct AppendReply {
-    pub clock: Clock,
-    pub matched: Option<HistoryId>,
-    pub conflict: Option<Index>,
+    // TODO: also return the last empty slot index?
+    pub term: Term,
+    pub matched: Option<LogId>,
+    pub conflict: Option<LogIndex>,
 }

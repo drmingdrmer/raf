@@ -1,9 +1,12 @@
-use crate::Clock;
 use crate::Cmd;
-use crate::Index;
+use crate::LogIndex;
+use crate::Term;
 
 pub struct AppendRequest {
-    pub clock: Clock,
-    pub since: Index,
-    pub payloads: Vec<(Clock, Cmd)>,
+    pub term: Term,
+
+    pub assume_matched_at: LogIndex,
+
+    pub terms: Vec<Term>,
+    pub cmds: Vec<Cmd>,
 }

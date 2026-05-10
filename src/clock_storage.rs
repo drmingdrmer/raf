@@ -2,18 +2,18 @@ use std::io;
 use std::ops::Range;
 
 use crate::ArrayChunk;
-use crate::Index;
-use crate::clock::Clock;
+use crate::LogIndex;
+use crate::term::Term;
 
-pub type ClockChunk = ArrayChunk<Clock>;
+pub type ClockChunk = ArrayChunk<Term>;
 
 #[derive(Debug, Clone)]
 pub struct TermArray {
-    clocks: Vec<Clock>,
+    clocks: Vec<Term>,
 }
 
 impl TermArray {
-    pub fn new(clocks: Vec<Clock>) -> Self {
+    pub fn new(clocks: Vec<Term>) -> Self {
         Self { clocks }
     }
 
@@ -21,7 +21,14 @@ impl TermArray {
         self.clocks.len() as u64
     }
 
-    pub fn update(&mut self, since: u64, clocks: &[Clock]) -> u64 {
+    // fill `index` for entry `index` for `[since, len)`
+    pub fn fill_gap(&mut self, since: u64) {
+        for i in since..self.len() {
+            self.clocks.push(i);
+        }
+    }
+
+    pub fn update(&mut self, since: u64, clocks: &[Term]) -> u64 {
         while self.len() < since {
             self.clocks.push(self.len());
         }
@@ -46,11 +53,11 @@ impl TermArray {
         ClockChunk { len, entries: clocks }
     }
 
-    pub fn read_one(&self, index: Index) -> Clock {
+    pub fn read_one(&self, index: LogIndex) -> Term {
         self.clocks.get(index as usize).unwrap().clone()
     }
 
-    pub fn last(&self) -> (Index, Clock) {
+    pub fn last(&self) -> (LogIndex, Term) {
         let last = self.clocks.last().unwrap();
 
         let index = self.len() - 1;

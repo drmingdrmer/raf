@@ -1,7 +1,7 @@
 //! Outbound network transport.
 //!
 //! `raf` exposes a single outbound RPC for now —
-//! [`Network::send_request_vote`] — used during leader election.
+//! [`Network::request_vote`] — used during leader election.
 //! The Core calls it directly and awaits the reply; outbound
 //! responses do not loop back through the Core's mailbox. Inbound
 //! RPCs *from* peers do arrive via the mailbox (see `DESIGN.md`
@@ -10,6 +10,8 @@
 use std::future::Future;
 use std::io;
 
+use crate::AppendRequest;
+use crate::append_reply::AppendReply;
 use crate::request_vote::RequestVote;
 use crate::request_vote_reply::RequestVoteReply;
 
@@ -25,11 +27,13 @@ pub trait Network: Send + Sync + 'static {
     /// Implementations own the send-and-await round-trip — the
     /// Core does not see the wire-level send / receive split. The
     /// `target` is an opaque node identifier (`u64`).
-    fn send_request_vote(
+    fn request_vote(&self, target: u64, req: RequestVote) -> impl Future<Output = io::Result<RequestVoteReply>> + Send;
+
+    fn append(
         &self,
         target: u64,
-        req: RequestVote,
-    ) -> impl Future<Output = io::Result<RequestVoteReply>> + Send;
+        req: crate::append_request::AppendRequest,
+    ) -> impl Future<Output = io::Result<AppendReply>> + Send;
 }
 
 /// Default in-process [`Network`] implementation, intended for
@@ -49,9 +53,13 @@ impl InProcessNetwork {
 }
 
 impl Network for InProcessNetwork {
-    async fn send_request_vote(&self, _target: u64, _req: RequestVote) -> io::Result<RequestVoteReply> {
+    async fn request_vote(&self, _target: u64, _req: RequestVote) -> io::Result<RequestVoteReply> {
         Err(io::Error::other(
             "InProcessNetwork::send_request_vote not yet implemented",
         ))
+    }
+
+    async fn append(&self, target: u64, req: AppendRequest) -> io::Result<AppendReply> {
+        todo!()
     }
 }
