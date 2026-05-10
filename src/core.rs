@@ -194,13 +194,13 @@ where N: Network
     /// 2. `req.last_log_id > local.last_log_id` — the candidate's history is fresher than ours.
     async fn handle_request_vote(&mut self, req: RequestVote) -> Result<RequestVoteReply, io::Error> {
         let local_term_len = self.terms.terms_len();
-        let local_last = self.terms.last_term();
+        let local_last_term = self.terms.last_term();
 
         let local_cmds_len = self.cmds.cmds_len();
         let local_last_cmd_term = self.terms.read_one_term(local_cmds_len - 1);
         let local_last_log_id = LogId::new(local_last_cmd_term, local_cmds_len - 1);
 
-        if req.term < local_last.term {
+        if req.term < local_last_term {
             return Ok(RequestVoteReply {
                 granted: false,
                 term_len: local_term_len,
@@ -337,13 +337,13 @@ where N: Network
     }
 
     async fn handle_append(&mut self, append: AppendRequest) -> Result<AppendReply, io::Error> {
-        let last = self.terms.last_term();
-        if append.term > last.term {
+        let last_term = self.terms.last_term();
+        if append.term > last_term {
             // TODO: save last-seen, instead of updating terms. Updating terms means accepting a
             // RequestVote.
-        } else if append.term < last.term {
+        } else if append.term < last_term {
             return Ok(AppendReply {
-                term: last.term,
+                term: last_term,
                 matched: None,
                 conflict: None,
             });
@@ -370,7 +370,7 @@ where N: Network
 
         let Some(last_matched) = last_matched else {
             return Ok(AppendReply {
-                term: last.term,
+                term: last_term,
                 matched: None,
                 conflict: Some(start),
             });
@@ -388,7 +388,7 @@ where N: Network
         }
 
         Ok(AppendReply {
-            term: last.term,
+            term: last_term,
             matched: Some(LogId::new(
                 *append.terms.last().unwrap(),
                 append.assume_matched_at + append.terms.len() as u64 - 1,
@@ -491,6 +491,13 @@ where N: Network
         _req: WriteRequest,
         reply_tx: oneshot::Sender<Result<WriteReply, io::Error>>,
     ) {
+        let Some(leader) = self.leader.as_mut() else {
+            reply_tx.send(Err(io::Error::other("not a leader; cannot handle write requests"))).ok();
+            return;
+        };
+        
+        
+
         todo!()
     }
 

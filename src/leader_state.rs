@@ -8,9 +8,14 @@
 
 use std::collections::BTreeMap;
 use std::collections::HashSet;
+use std::collections::VecDeque;
 
+use tokio::sync::oneshot;
+
+use crate::LogIndex;
 use crate::NodeId;
 use crate::ReplicationState;
+use crate::WriteReply;
 
 /// Election / leadership state.
 ///
@@ -39,4 +44,6 @@ pub(crate) struct LeaderState {
     pub replications: BTreeMap<NodeId, ReplicationState>,
 
     pub committed: u64,
+
+    pub pending_writes: VecDeque<(LogIndex, oneshot::Sender<WriteReply>)>,
 }
