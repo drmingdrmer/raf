@@ -8,14 +8,15 @@ use tokio::sync::mpsc::UnboundedSender;
 use tokio::sync::mpsc::unbounded_channel;
 use tokio::sync::oneshot;
 
-use crate::AppendReply;
 use crate::Cmd;
 use crate::Membership;
 use crate::NodeId;
 use crate::ReplicationState;
 use crate::Term;
+use crate::append_reply::AppendReply;
 use crate::append_request::AppendRequest;
 use crate::clock_storage::TermArray;
+use crate::event::Event;
 use crate::history_storage::CmdArray;
 use crate::leader_state::LeaderState;
 use crate::log_id::LogId;
@@ -25,50 +26,10 @@ use crate::request_vote_reply::RequestVoteReply;
 use crate::write_reply::WriteReply;
 use crate::write_request::WriteRequest;
 
-/// Internal mailbox event.
-///
-/// Each variant is one inbound thing the Core has to react to. For
-/// inbound RPCs and application requests the variant carries a
-/// `oneshot::Sender` — the caller (transport or application) owns
-/// the receiver and awaits the reply.
-pub(crate) enum Event {
-    Elect {},
-    /// Inbound `RequestVote` from a peer; the Core decides the vote
-    /// per `DESIGN.md` §8.3 and ships the reply back through
-    /// `reply_tx`.
-    RequestVote {
-        req: RequestVote,
-        reply_tx: oneshot::Sender<RequestVoteReply>,
-    },
-    RequestVoteReply {
-        sending_term: Term,
-        target: NodeId,
-        reply: RequestVoteReply,
-    },
-    Append {
-        req: AppendRequest,
-        reply_tx: oneshot::Sender<AppendReply>,
-    },
-    AppendReply {
-        sending_term: Term,
-        target: NodeId,
-        reply: AppendReply,
-    },
-
-    /// Application write request submitted via
-    /// [`crate::Raf::write`] — handled per `DESIGN.md` §9.
-    /// Only an established leader produces an `Ok` reply; everyone
-    /// else returns an `io::Error`.
-    Write {
-        req: WriteRequest,
-        reply_tx: oneshot::Sender<Result<WriteReply, io::Error>>,
-    },
-}
-
 pub(crate) struct Core<N>
 where N: Network
 {
-    term_storage: TermArray,
+    terms: TermArray,
 
     cmds: CmdArray,
 
@@ -104,7 +65,7 @@ where N: Network
     ) -> UnboundedSender<Event> {
         let (tx, rx) = unbounded_channel();
         let core = Self {
-            term_storage,
+            terms: term_storage,
             cmds: storage,
             network,
             id,
@@ -169,24 +130,24 @@ where N: Network
     }
 
     async fn do_elect(&mut self) -> Result<(), io::Error> {
-        let term = self.term_storage.len();
+        let term = self.terms.len();
 
         self.leader = Some(LeaderState {
-            term: self.term_storage.len(),
+            term: self.terms.len(),
             granted_votes: std::iter::once(self.id).collect(), // grant self vote
             established: false,
             replications: Default::default(),
             committed: 0,
         });
 
-        self.term_storage.update(term, &[term]);
+        self.terms.update(term, &[term]);
 
         self.spawn_request_vote_rpcs(term).await?;
 
         Ok(())
     }
 
-    async fn spawn_request_vote_rpcs(&mut self, clock: u64) -> Result<(), io::Error> {
+    async fn spawn_request_vote_rpcs(&mut self, term: u64) -> Result<(), io::Error> {
         for peer in self.membership.node_ids() {
             if peer == &self.id {
                 continue;
@@ -195,14 +156,14 @@ where N: Network
             let last_history_id = self.last_log_id().await;
 
             let req = RequestVote {
-                term: clock,
+                term,
                 last_log_id: last_history_id,
             };
 
             let network = Arc::clone(&self.network);
             let reply_tx = self.mailbox_tx.clone();
 
-            let sending_term = clock;
+            let sending_term = term;
             let target = *peer;
 
             tokio::spawn(async move {
@@ -240,10 +201,10 @@ where N: Network
     ///    last_leader_index" check redundant — see §6.4).
     /// 2. `req.last_log_id > local.last_log_id` — the candidate's history is fresher than ours.
     async fn handle_request_vote(&mut self, req: RequestVote) -> Result<RequestVoteReply, io::Error> {
-        let local_last = self.term_storage.last();
+        let local_last = self.terms.last();
 
         let local_cmds_len = self.cmds.len();
-        let local_last_cmd_term = self.term_storage.read_one(local_cmds_len - 1);
+        let local_last_cmd_term = self.terms.read_one(local_cmds_len - 1);
         let local_last_log_id = LogId::new(local_last_cmd_term, local_cmds_len - 1);
 
         if req.term < local_last.term {
@@ -265,7 +226,7 @@ where N: Network
         // reset all leader or candidate
         self.leader = None;
 
-        let _len = self.term_storage.update(local_last.index + 1, &[req.term]);
+        let _len = self.terms.update(local_last.index + 1, &[req.term]);
 
         Ok(RequestVoteReply {
             granted: true,
@@ -316,9 +277,9 @@ where N: Network
         }
 
         let cmds_len = self.cmds.len();
-        let n = self.term_storage.len() - cmds_len;
+        let n = self.terms.len() - cmds_len;
 
-        self.term_storage.fill_gap(cmds_len);
+        self.terms.fill_gap(cmds_len);
 
         // Occupy all entries with no-op Cmd.
         let cmds = vec![Cmd::empty(); n as usize];
@@ -352,7 +313,7 @@ where N: Network
             // TODO: len should not exceed cmds.len()
 
             // includes the last matched, will be used in the role of `prev`
-            let terms = self.term_storage.read(start..start + len).entries;
+            let terms = self.terms.read(start..start + len).entries;
             let cmds = self.cmds.read(start..start + len).entries;
 
             let append_request = AppendRequest {
@@ -384,7 +345,7 @@ where N: Network
 
     async fn handle_append(&mut self, append: AppendRequest) -> Result<AppendReply, io::Error> {
         //
-        let last = self.term_storage.last();
+        let last = self.terms.last();
         if append.term > last.term {
             // TODO: save last-seen, instead of update storage. updating storage means accept a
             // request-vote. self.term_storage.update(append.term, &[append.term]);
@@ -404,7 +365,7 @@ where N: Network
 
         // find the matches
 
-        let local_terms = self.term_storage.read(start..end).entries;
+        let local_terms = self.terms.read(start..end).entries;
         let mut last_matched = None;
 
         for i in start..end {
@@ -427,7 +388,7 @@ where N: Network
             self.cmds.truncate(last_matched + 1);
         }
 
-        self.term_storage.update(append.assume_matched_at, &append.terms);
+        self.terms.update(append.assume_matched_at, &append.terms);
 
         let append_from = self.cmds.len().saturating_sub(append.assume_matched_at) as usize;
         if append_from < append.cmds.len() {
@@ -546,7 +507,7 @@ where N: Network
 
         let index = cmds_len - 1;
 
-        let last_term = self.term_storage.read_one(index);
+        let last_term = self.terms.read_one(index);
         LogId::new(last_term, index)
     }
 }
@@ -580,7 +541,7 @@ mod tests {
         let (mailbox_tx, mailbox) = unbounded_channel();
 
         Core {
-            term_storage: TermArray::new(terms),
+            terms: TermArray::new(terms),
             cmds: CmdArray::new(vec![Cmd::empty(); cmds_len]),
             network: Arc::new(NoopNetwork),
             id: 1,
@@ -604,7 +565,7 @@ mod tests {
 
         let reply = core.handle_append(append).await.unwrap();
 
-        assert_eq!(core.term_storage.len(), 4);
+        assert_eq!(core.terms.len(), 4);
         assert_eq!(core.cmds.len(), 4);
         assert_eq!(reply.matched.unwrap(), LogId::new(1, 3));
 
@@ -617,7 +578,7 @@ mod tests {
 
         let reply = core.handle_append(append).await.unwrap();
 
-        assert_eq!(core.term_storage.len(), 4);
+        assert_eq!(core.terms.len(), 4);
         assert_eq!(core.cmds.len(), 4);
         assert_eq!(reply.matched.unwrap(), LogId::new(1, 3));
     }

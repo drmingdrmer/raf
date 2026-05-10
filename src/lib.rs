@@ -11,6 +11,7 @@ mod array_chunk;
 mod clock_storage;
 mod cmd;
 mod core;
+mod event;
 mod history_storage;
 mod index;
 mod leader_state;
