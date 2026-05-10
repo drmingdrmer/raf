@@ -38,10 +38,10 @@ impl InProcessNetwork {
     }
 
     /// Register or replace the [`Raf`] handle for `target`.
-    pub fn insert(&self, target: NodeId, raf: Raf) -> io::Result<Option<Raf>> {
+    pub fn insert(&self, target: NodeId, raf: Raf) -> Option<Raf> {
         let mut routes = self.routes.write().unwrap();
 
-        Ok(routes.insert(target, raf))
+        routes.insert(target, raf)
     }
 
     fn target_handle(&self, target: NodeId) -> io::Result<Raf> {

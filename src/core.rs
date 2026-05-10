@@ -555,9 +555,7 @@ where
     /// Return the last log id derived from the command length and term array.
     async fn last_log_id(&self) -> LogId {
         let cmds_len = self.storage.cmds_len().await;
-
         let index = cmds_len - 1;
-
         let last_term = self.storage.read_one_term(index).await;
         LogId::new(last_term, index)
     }

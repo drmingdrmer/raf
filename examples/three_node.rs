@@ -30,7 +30,7 @@ async fn main() -> Result<(), io::Error> {
     let mut nodes: BTreeMap<u64, Raf> = BTreeMap::new();
     for id in [1u64, 2, 3] {
         let raf = Raf::new(id, membership.clone(), MemStorage::new(), network.clone());
-        network.insert(id, raf.clone())?;
+        network.insert(id, raf.clone());
         nodes.insert(id, raf);
     }
 
