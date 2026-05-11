@@ -243,7 +243,7 @@ index:  0  1  2  3  4  5  6  7  8  9
 三种结果分别是：
 
 - `granted`：voter 的 `terms` 只到 index `3`，`cmds` 也只到 index `3`。因此 `req.term = 5` 是一个尚未出现过的新 term index，并且 `req.last_log_id = (2, 3)` 不落后于 voter，本次投票可以授予。
-- `rejected: term=7`：voter 已经观察到更靠后的 term index `7`。因为 `req.term = 4 < terms.len()`，candidate 请求的 term 在 voter 本地已经过期，所以拒绝。
+- `rejected: term=7`：voter 已经观察到更靠后的 term index `7`。因为 `req.term = 5 < terms.len()`，candidate 请求的 term 在 voter 本地已经过期，所以拒绝。
 - `rejected: last log id = (4,4)`：voter 的最后一条完整日志是 `(4, 4)`，比 candidate 的 `(2, 3)` 更新。即使 candidate 请求的 term 可以写入，日志 freshness 也不满足，所以拒绝。
 
 如果请求合法，voter 会把这个 term 记录进本地 `terms`。如果本地 `terms` 比 `req.term` 短，就用默认 index 补齐，直到本地已经包含 index `req.term`：
@@ -334,6 +334,51 @@ struct Append {
 
 标准 Raft 的 AppendEntries 会单独携带 `prevLogIndex` 和 `prevLogTerm`。`raf` 的实现没有把这个匹配点单独拆出来，而是让请求中的第一条日志同时承担匹配检查的角色：follower 从 `start` 开始逐个比较本地 `terms` 和请求里的 `terms`。
 
+下面的图展示同一个 Append 请求面对几种 follower 状态时的结果。这个请求的 `term = 5`，`start = 3`，并携带 index `3..=5` 的连续日志；index `3` 是这次请求的匹配点。
+
+```diagram
+
+Append:
+                 .-- start = 3
+                 |   terms = [2,5,5]
+                 |   cmds  = [c3,ø,c5]
+                 v
+leader terms: 0  1  2 [2  4  5]
+leader cmds : ø  ø  ø [c3 ø  c5]
+----------------------------------------> index
+              0  1  2  3  4  5  6  7
+    |   |   |
+    |   |   |
+    |   |   | accepted: append missing suffix and update terms
+    |   |   v
+    |   |   terms: 0  1  2 {2  5  5}
+    |   |   cmds : ø  ø  ø  c3 {ø  c5}
+    |   |   ----------------------------------------> index
+    |   |          0  1  2  3  4  5  6  7
+    |   |
+    |   |
+    |   | conflict at start
+    |   v
+    |   terms: 0  1  2  3*
+    |   cmds : ø  ø  ø  x*
+    |   ----------------------------------------> index
+    |          0  1  2  3  4  5  6  7
+    |
+    |
+    | rejected: follower has newer term
+    v
+    terms: 0  1  2  2  4  5  6*
+    cmds : ø  ø  ø  c3 ø  ø  ø
+    ----------------------------------------> index
+           0  1  2  3  4  5  6  7
+```
+
+三种结果分别是：
+
+- `accepted`：follower 在 `start = 3` 处和 leader 匹配，因此可以接受这段 Append。`{...}` 标出本次请求覆盖的 `terms` 范围，以及本地缺失后被追加的 command 范围。这里 index `4` 的 term 从旧值更新成 `5`，index `5` 的 command `c5` 被追加。
+- `conflict at start`：`*` 标出 conflict position。follower 在 index `3` 的 term 是 `3`，而请求里 index `3` 的 term 是 `2`。因为第一项就不匹配，follower 直接返回 conflict index，leader 需要换一个更早的 `start` 继续探测。
+- `rejected: follower has newer term`：follower 已经在 index `6` 观察到 term `6`，而 Append 的 term 是 `5`。这个请求来自 stale leader，follower 不修改日志并拒绝。
+
 处理逻辑可以概括为：
 
 1. 如果请求 term 比本地最后观察到的 term 更旧，拒绝。
@@ -365,7 +410,30 @@ if quorum_has_matched(index) && index >= leader.term {
 
 这样做的目的和标准 Raft 一样：一旦某个 index 被提交，后续任何合法 leader 都必须包含它，不能再覆盖它。
 
-![Quorum commit rule](assets/quorum-commit.svg)
+下面这个状态展示了为什么不能只看“是否复制到 quorum”。term `6` 的 leader 已经把 index `4` 和 `5` 的旧日志复制到了 quorum `A+B`，但 quorum 还没有匹配到这个 leader 自己的 term index `6`，所以 index `4` 和 `5` 仍然不能被提交：
+
+```diagram
+Not committed yet:
+
+leader term = 6
+
+node A terms: 0  1  2  2 {2} 2  6
+node A cmds : ø  ø  ø  c {x} ø  ø
+
+node B terms: 0  1  2  2 {2} 2  6
+node B cmds : ø  ø  ø  c {x}
+
+node C terms: 0  1  2  2  4  5  5  7  <-- new leader
+node C cmds : ø  ø  ø  c  ø  ø  ø
+----------------------------------------> index
+              0  1  2  3  4  5  6  7
+
+index 4 and 5 are on quorum A+B,
+but quorum has not matched index 6, the leader term index.
+```
+
+如果随后出现 term `7` 的新 leader，并且它的 `last_log_id=(5,6)` 更大，那么它可以用自己覆盖这些未提交日志。这里 `{x}` 标出被新 leader 替换的范围：
+
 
 _leader 只直接提交 quorum 覆盖且位于当前 leader term 范围内的 index。_
 
@@ -401,8 +469,6 @@ Automatic election trigger 指的是标准 Raft 里的 election timer：节点�
 RequestVote retry 有一个更细的边界：如果目标节点已经成功处理了 `RequestVote`，但 reply 在网络里丢失，candidate 重试同一个请求时，目标节点本地已经在 `terms[req.term]` 记录过这个 term。按当前规则，它会拒绝这个重试请求，因为这个 term index 已经存在。
 
 一个可选修补方式是在内存中增加 `voted_for`，记录某个 term 属于哪个 candidate。这样同一个 candidate 对同一个 term 的重试可以被识别并再次返回 granted。这个字段不一定要持久化：如果节点重启后丢失了 `voted_for`，它可以保守地拒绝所有使用本地已存在 term 的 `RequestVote`。这会带来一个小的可用性问题，但只发生在节点重启之后；它不会改变已经持久化的日志和 term 关系。
-
-![RequestVote retry after lost reply](assets/request-vote-retry.svg)
 
 _如果 RequestVote reply 丢失，重试会遇到已存在的 term；可选的 in-memory `voted_for` 可以改善这个可用性问题。_
 
