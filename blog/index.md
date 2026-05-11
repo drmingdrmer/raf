@@ -60,30 +60,29 @@ struct RafStorage {
 - `cmds[i]` 是 index `i` 这条日志的应用命令。
 - `log_id(i)` 仍然是 `(terms[i], i)`。
 
-```diagram
+下面是一段可能出现的存储状态。`_` 表示 empty command；`cmds` 只到 index `7`，所以 index `8` 和 `9` 还不是完整日志项。
 
+```text
 Storage layout:
 
-terms array:  0  1  2  2  4  5  6  6  8  9
-cmds  array:  ø  ø  ø  c3 ø  ø  ø  c7
+terms vector:  0  1  2  2  4  5  6  6  8  9
+cmds  vector:  _  _  _  C3 _  _  _  C7
 ----------------------------------------------> index
-              0  1  2  3  4  5  6  7  8  9
+               0  1  2  3  4  5  6  7  8  9
 ```
 
-- `[0]` 总是空的
-- `[1]` 是一个 Leader 在 Term 等于 1、Index 等于 1 的位置,  因为 Leader
-的第一条日志都是空的，所以这里只写了一条空的日志。
+逐个 index 看，这段状态表示：
 
-在 Index 等于 2 的位置选出了一个新的
-Leader，其第一条日志同样为空，随后写入了一条真正的业务日志，即 C3。
-
-在 Index 等于 4 的位置有一次尝试的选举，但没有选出 Leader；5
-的位置也没有选出 Leader。这是两次失败的选举，Term 分别是 4 和 5。
-
-在 Term 等于 6 的位置最终选出了一个 Leader，其第一条 Log Command
-也是空，随后又新写入了一个新的业务，即 C7。
-
-然后在 Index 8 的位置又尝试了一次新的选举，还没有完成；然后 9 的位置又尝试了一个新的选举，也不确定是否完成
+- index `0`：固定存在的默认项。`terms[0] = 0`，`cmds[0]` 是 empty command。
+- index `1`：term `1` 对应的一次成功 election。这个 leader 当选时占用 index `1`，并写入第一条 empty command。
+- index `2`：term `2` 对应的一次成功 election。新的 leader 占用 index `2`，第一条日志同样是 empty command。
+- index `3`：term `2` 的 leader 写入的一条业务日志 `C3`，所以 `terms[3] = 2`，`cmds[3] = C3`。
+- index `4`：term `4` 对应的一次 election attempt，但没有形成 established leader。后来 term `6` 的 leader 建立时，为了让 `cmds` 追上 `terms`，这里被补成 empty command。
+- index `5`：term `5` 对应的一次 election attempt，同样没有形成 established leader；后来也被补成 empty command。
+- index `6`：term `6` 对应的一次成功 election。这个 leader 当选时占用 index `6`，并写入第一条 empty command。
+- index `7`：term `6` 的 leader 写入的一条业务日志 `C7`，所以 `terms[7] = 6`，`cmds[7] = C7`。
+- index `8`：term `8` 对应的一次新的 election attempt。当前只看到 `terms[8] = 8`，还没有对应的 command，因此它还不是完整日志项。
+- index `9`：term `9` 对应的另一次 election attempt。和 index `8` 一样，当前只有 term 记录，还没有对应的 command，是否最终形成 leader 还不能从这段状态判断。
 
 
 _标准 Raft 持久化独立的 `current_term`；`raf` 把每个 index 的 term 和 command 拆成两段对齐的 `Vec`。_
@@ -105,8 +104,6 @@ cmds[0]  = empty
 log[index] = (terms[index], cmds[index])
 log_id     = (terms[index], index)
 ```
-
-![terms and cmds vectors](assets/storage-layout.svg)
 
 _`terms` 和 `cmds` 共享同一个 log index；选举期间，`terms` 可以短暂领先于 `cmds`。_
 
