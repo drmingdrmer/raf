@@ -10,13 +10,13 @@
 
 - P1：收到合法 `Append` 时没有清空本地 candidate/leader 状态。当前修复在 `append.term >= local_last_term` 时清空本地 leader state，让节点退回 follower。
 
+- P1：`AppendRequest` 没有校验窗口合法性。当前修复要求 `terms.len() == cmds.len()`；如果两者都为空，返回 `matched = None` 且 `conflict = None` 的空回复。
+
 ## 跳过
 
 - P1：candidate 收到任意 rejected vote 就直接 step down。当前实现有意保持严格行为；任意拒票都会让 candidate 退回 follower。
 
 ## 待修复
-
-- P1：`AppendRequest` 没有校验窗口合法性。空 `terms` 会触发 `unwrap()` panic；`terms.len() != cmds.len()` 可能导致 term array 和 command array 分叉。
 
 - P1：replication 的 `end` 在成功匹配后不更新。出现 `matched > end` 后，后续 bisection probe 会退回旧窗口，破坏复制进度 invariant。
 

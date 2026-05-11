@@ -167,11 +167,13 @@ leader 对每个 peer 保存：
 
 收到 `Append` 后，follower：
 
-1. 如果 `append.term < local_last_term`，返回本地 term，并不匹配任何 index。
-2. 否则清空本地 candidate/leader 内存态，退回 follower。
-3. 从 `assume_matched_at` 开始逐 slot 比较本地 `terms` 与请求 `terms`。
-4. 如果第一个 slot 就不匹配，返回 `conflict = Some(assume_matched_at)`。
-5. 如果有匹配 prefix：
+1. 要求 `terms.len() == cmds.len()`；长度不等说明请求 malformed，直接 panic。
+2. 如果 `terms` 和 `cmds` 都为空，返回空回复：`matched = None` 且 `conflict = None`。
+3. 如果 `append.term < local_last_term`，返回本地 term，并不匹配任何 index。
+4. 否则清空本地 candidate/leader 内存态，退回 follower。
+5. 从 `assume_matched_at` 开始逐 slot 比较本地 `terms` 与请求 `terms`。
+6. 如果第一个 slot 就不匹配，返回 `conflict = Some(assume_matched_at)`。
+7. 如果有匹配 prefix：
    - 如果本地 command tail 与 leader 分歧，截断到 `last_matched + 1`。
    - 覆盖本地 `terms` window。
    - 只追加本地缺失的 command suffix，避免重复追加已存在 command。

@@ -449,7 +449,22 @@ where
 
     /// Handle an inbound append request from a leader.
     async fn handle_append(&mut self, append: AppendRequest) -> Result<AppendReply, io::Error> {
+        assert_eq!(
+            append.terms.len(),
+            append.cmds.len(),
+            "AppendRequest terms and cmds must have the same length"
+        );
+
         let last_term = self.storage.last_term().await;
+        if append.terms.is_empty() {
+            log::debug!("ignoring empty Append node={} append_term={}", self.id, append.term);
+            return Ok(AppendReply {
+                term: last_term,
+                matched: None,
+                conflict: None,
+            });
+        }
+
         if append.term > last_term {
             // TODO: save last-seen, instead of updating terms. Updating terms means accepting a
             // RequestVote.
@@ -937,5 +952,40 @@ mod tests {
         assert_eq!(reply.matched.unwrap(), LogId::new(1, 1));
         assert!(core.leader.is_none());
         assert_eq!(core.storage.cmds_len().await, 2);
+    }
+
+    #[tokio::test]
+    async fn handle_append_returns_empty_reply_for_empty_window() {
+        let mut core = new_core(vec![0, 1], 2, Membership::new(vec![1, 2, 3]));
+
+        let append = AppendRequest {
+            term: 1,
+            assume_matched_at: 2,
+            terms: vec![],
+            cmds: vec![],
+        };
+
+        let reply = core.handle_append(append).await.unwrap();
+
+        assert_eq!(reply.term, 1);
+        assert!(reply.matched.is_none());
+        assert!(reply.conflict.is_none());
+        assert_eq!(core.storage.terms_len().await, 2);
+        assert_eq!(core.storage.cmds_len().await, 2);
+    }
+
+    #[tokio::test]
+    #[should_panic(expected = "AppendRequest terms and cmds must have the same length")]
+    async fn handle_append_panics_on_mismatched_window_lengths() {
+        let mut core = new_core(vec![0, 1], 2, Membership::new(vec![1, 2, 3]));
+
+        let append = AppendRequest {
+            term: 1,
+            assume_matched_at: 1,
+            terms: vec![1],
+            cmds: vec![],
+        };
+
+        core.handle_append(append).await.unwrap();
     }
 }
