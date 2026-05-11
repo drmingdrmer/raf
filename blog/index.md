@@ -152,6 +152,35 @@ let last_log_id = (terms[last_log_index], last_log_index);
 
 这里和标准 Raft 的含义一致：voter 用它判断候选人的日志是否至少和自己一样新。
 
+```diagram
+
+Leader election:
+                       .-- last log id = (2,3)
+                       |  new term = 4
+                       |  |
+                       v  v
+terms array:  0  1  2  2 [4]
+cmds  array:  ø  ø  ø  c3
+----------------------------------------------> index
+              0  1  2  3  4  5  6  7  8  9
+```
+
+这是如果 term 等于 4 的 leader 选举失败了，那么下一次选举的话，可能就在 term 等于 5 继续执行。
+
+```diagram
+
+Leader election:
+                       .-- last log id = (2,3)
+                       |     new term = 5
+                       |     |
+                       v     v
+terms array:  0  1  2  2  4 [5]
+cmds  array:  ø  ø  ø  c3
+----------------------------------------------> index
+              0  1  2  3  4  5  6  7  8  9
+```
+
+
 ## 处理投票请求
 
 收到 `RequestVote` 后，voter 需要判断两件事：
