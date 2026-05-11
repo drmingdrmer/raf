@@ -1,4 +1,4 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 600 620" role="img" aria-label="Not committed yet: quorum has not matched the leader's term index">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 700 620" role="img" aria-label="Not committed yet: quorum has not matched the leader's term index">
   <style>
     svg { background: #f8fafc; color: #172033;
       font-family: Inter, ui-sans-serif, system-ui, -apple-system,
@@ -29,7 +29,7 @@
     </marker>
   </defs>
 
-  <rect class="canvas" width="600" height="620"/>
+  <rect class="canvas" width="700" height="620"/>
 
   <text class="title" x="20" y="26">Not committed yet</text>
   <text class="label" x="20" y="50">leader term = 6</text>
