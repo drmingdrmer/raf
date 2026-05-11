@@ -40,6 +40,14 @@ log_id     = (terms[index], index)
 
 leader 之后追加的新日志项都使用同一个 `leader.term`。
 
+term array 必须保持一个关键不变量：
+
+```text
+i >= terms[i]
+```
+
+也就是说，一个 slot 里记录的 leader term 不能大于这个 slot 自身的 index。因为 term 本身就是 leader 当选时占用的 index slot。
+
 ## 组件
 
 - `Raf`：公开 API。负责把本地 election、入站 RPC、application write 转成 `Event` 发给 `Core`。
@@ -111,8 +119,9 @@ leader 发给 peer，用于探测匹配点并复制日志窗口。
 1. 读取本地最后一个 term slot，得到 `local_last_term`。
 2. 读取本地最后一条 command 对应的 `local_last_log_id`。
 3. 如果 `req.term < local_last_term`，拒绝。
-4. 如果 `req.last_log_id < local_last_log_id`，拒绝。
-5. 否则清空本地 `leader` 内存态，写入新的 term slot，并返回 `granted = true`。
+4. 如果 `req.term < local_next_term_slot`，拒绝。候选人的 term slot 在本地已经存在，不能再次授予。
+5. 如果 `req.last_log_id < local_last_log_id`，拒绝。
+6. 否则清空本地 `leader` 内存态，写入新的 term slot，并返回 `granted = true`。
 
 当前实现和标准 Raft 一样接受相同 freshness：候选人的日志不落后即可。
 

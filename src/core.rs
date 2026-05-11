@@ -238,17 +238,31 @@ where
         let local_last_cmd_term = self.storage.read_one_term(local_cmds_len - 1).await;
         let local_last_log_id = LogId::new(local_last_cmd_term, local_cmds_len - 1);
 
+        let reply = RequestVoteReply {
+            granted: false,
+            next_term_slot: local_next_term_slot,
+            last_log_id: local_last_log_id.clone(),
+        };
+
         if req.term < local_last_term {
             log::debug!(
                 "rejecting RequestVote node={} req_term={} local_last_term={local_last_term}",
                 self.id,
                 req.term
             );
-            return Ok(RequestVoteReply {
-                granted: false,
-                next_term_slot: local_next_term_slot,
-                last_log_id: local_last_log_id,
-            });
+            return Ok(reply.with_granted(false));
+        }
+
+        // A candidate term names the slot it wants to claim. If that
+        // slot already exists locally, this voter has already observed
+        // an owner for it and must not grant it again.
+        if req.term < local_next_term_slot {
+            log::debug!(
+                "rejecting RequestVote node={} req_term={} local_next_term_slot={local_next_term_slot}",
+                self.id,
+                req.term
+            );
+            return Ok(reply.with_granted(false));
         }
 
         if req.last_log_id < local_last_log_id {
@@ -257,11 +271,7 @@ where
                 self.id,
                 req.last_log_id
             );
-            return Ok(RequestVoteReply {
-                granted: false,
-                next_term_slot: local_next_term_slot,
-                last_log_id: local_last_log_id,
-            });
+            return Ok(reply.with_granted(false));
         }
 
         // reset all leader or candidate
@@ -275,11 +285,7 @@ where
             req.term
         );
 
-        Ok(RequestVoteReply {
-            granted: true,
-            next_term_slot: local_next_term_slot,
-            last_log_id: local_last_log_id,
-        })
+        Ok(reply.with_granted(true))
     }
 
     /// Handle one vote reply for the current candidacy.
@@ -857,5 +863,23 @@ mod tests {
         assert_eq!(metrics.granted_votes, vec![1, 2, 3]);
         assert_eq!(metrics.replications.len(), 4);
         assert_eq!(metrics.replications[&1].matched, 12);
+    }
+
+    #[tokio::test]
+    async fn request_vote_rejects_already_observed_term_slot() {
+        let mut core = new_core(vec![0], 1, Membership::new(vec![1, 2, 3]));
+
+        let req = RequestVote {
+            term: 1,
+            last_log_id: LogId::new(0, 0),
+        };
+
+        let reply = core.handle_request_vote(req.clone()).await.unwrap();
+        assert!(reply.granted);
+        assert_eq!(core.storage.terms_len().await, 2);
+
+        let reply = core.handle_request_vote(req).await.unwrap();
+        assert!(!reply.granted);
+        assert_eq!(reply.next_term_slot, 2);
     }
 }

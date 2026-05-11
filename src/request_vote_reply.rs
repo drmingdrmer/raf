@@ -24,3 +24,11 @@ pub struct RequestVoteReply {
     /// grounds.
     pub last_log_id: LogId,
 }
+
+impl RequestVoteReply {
+    /// Return this reply with its grant flag set to `granted`.
+    pub fn with_granted(mut self, granted: bool) -> Self {
+        self.granted = granted;
+        self
+    }
+}
