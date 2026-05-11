@@ -1,4 +1,4 @@
-# 一个不单独保存 Term 的 Raft：把 Log Index 变成逻辑时间
+# Raf: 不存 Term 的 Raft：把 Log Index 变成逻辑时间
 
 > 摘要：`raf` 是一个实验性的 Raft 变体。它不把 `currentTerm` 作为独立字段持久化，而是让候选人在发起选举时占用一个 log index，并把这个 index 作为 leader term。这样做不会取消 Raft 的逻辑时间模型，而是改变 term 在存储中的来源。
 
@@ -24,7 +24,7 @@
 
 这个 term 与 Paxos 里的 ballot number 扮演的是类似角色。它让系统可以在不知道所有节点完整日志的情况下，仍然判断哪个历史更新、更有资格成为 leader。
 
-> TODO(image, P2): 画一张“逻辑时间 vs 日志事件”的概念图。用横轴表示 log index，用颜色标出不同 term，说明 index 只表示本地历史位置，而 term 表示跨节点比较时使用的逻辑时间。
+**Log index 表示本地事件位置；term 表示跨节点比较历史时使用的逻辑时间**
 
 `raf` 保留这个概念，但改变它的存储方式。
 
@@ -60,7 +60,33 @@ struct RafStorage {
 - `cmds[i]` 是 index `i` 这条日志的应用命令。
 - `log_id(i)` 仍然是 `(terms[i], i)`。
 
-> TODO(image, P1): 画一张左右对比图。左边是标准 Raft 的 `current_term`、`voted_for` 和 `log[index] = (term, cmd)`；右边是 `raf` 的 `terms[i]` 与 `cmds[i]`，并标出 leader term 来自某个 log index。
+```diagram
+
+Storage layout:
+
+terms array:  0  1  2  2  4  5  6  6  8  9
+cmds  array:  ø  ø  ø  c3 ø  ø  ø  c7
+----------------------------------------------> index
+              0  1  2  3  4  5  6  7  8  9
+```
+
+- `[0]` 总是空的
+- `[1]` 是一个 Leader 在 Term 等于 1、Index 等于 1 的位置,  因为 Leader
+的第一条日志都是空的，所以这里只写了一条空的日志。
+
+在 Index 等于 2 的位置选出了一个新的
+Leader，其第一条日志同样为空，随后写入了一条真正的业务日志，即 C3。
+
+在 Index 等于 4 的位置有一次尝试的选举，但没有选出 Leader；5
+的位置也没有选出 Leader。这是两次失败的选举，Term 分别是 4 和 5。
+
+在 Term 等于 6 的位置最终选出了一个 Leader，其第一条 Log Command
+也是空，随后又新写入了一个新的业务，即 C7。
+
+然后在 Index 8 的位置又尝试了一次新的选举，还没有完成；然后 9 的位置又尝试了一个新的选举，也不确定是否完成
+
+
+_标准 Raft 持久化独立的 `current_term`；`raf` 把每个 index 的 term 和 command 拆成两段对齐的 `Vec`。_
 
 这个结构并不是说日志项没有 term。相反，每个 log index 仍然可以找到对应的 leader term。它去掉的是单独的 `currentTerm` 存储项，并让一次选举占用的 index 同时承担 term 的身份。
 
@@ -80,7 +106,9 @@ log[index] = (terms[index], cmds[index])
 log_id     = (terms[index], index)
 ```
 
-> TODO(image, P1): 画 `terms` 和 `cmds` 两个并排向量。标出 index `0` 的默认项、某个 election 占用的 index，以及 `terms` 短暂比 `cmds` 长的状态。
+![terms and cmds vectors](assets/storage-layout.svg)
+
+_`terms` 和 `cmds` 共享同一个 log index；选举期间，`terms` 可以短暂领先于 `cmds`。_
 
 在选举期间，`terms` 可以短暂比 `cmds` 长。原因是候选人会先占用一个 index 作为 term；只有当它成为 established leader 后，才会用一条 empty command 把 `cmds` 补齐。
 
@@ -160,7 +188,9 @@ if can_vote {
 
 这部分替代了标准 Raft 中持久化 `currentTerm` 的角色，但它不完全等价于标准 Raft 的 `votedFor`。当前实现没有持久化“这个 term 投给了谁”，因此 RequestVote 重试和节点重启后的行为会更保守；后面的“当前边界”会单独说明这个取舍。
 
-> TODO(image, P2): 画一个三节点选举过程。节点 A 选择 `terms.len()` 作为 term，向 B/C 请求投票；B/C 在本地 `terms` 中记录这个 term，表示已经观察并接受这次选举。
+![Three node election flow](assets/election-flow.svg)
+
+_候选人选择 `terms.len()` 作为 term；其它节点在本地 `terms` 中记录这个 term 并授予投票。_
 
 当候选人收到 quorum 的 granted reply 后，它成为 established leader。此时它会追加一条 empty command，使 `cmds.len()` 追上 `terms.len()`。这条日志对应 leader 当选时占用的 index。
 
@@ -190,7 +220,9 @@ struct ReplicationState {
 
 leader 自己也会有一份 replication state。这样计算 commit 时可以统一处理：只需要看哪些节点的 `matched` 覆盖了某个 index，并判断这些节点是否组成 quorum。
 
-> TODO(image, P2): 画 leader state 的结构图。中心是 `LeaderState { term, granted_nodes, replications }`，旁边展开每个 target 的 `ReplicationState { matched, end, inflight }`，并特别标出 leader 自己也在 `replications` 中。
+![Leader state](assets/leader-state.svg)
+
+_Established leader 保存本次 leadership 的 term、已授予节点集合，以及每个节点的 replication progress。_
 
 ## 写入日志
 
@@ -229,7 +261,9 @@ struct Append {
 5. 覆盖本地 `terms` 中本次请求对应的范围。
 6. 只追加本地缺失的 commands。
 
-> TODO(image, P2): 画 leader 与 follower 的两段日志。用颜色标出共同前缀、冲突 index、被截断的 follower 后缀，以及随后从 leader 复制过来的缺失日志。
+![Replication conflict repair](assets/replication-conflict.svg)
+
+_Append 找到共同前缀，截断 follower 的冲突后缀，再复制 leader 缺失的日志。_
 
 这个流程仍然是 Raft 的核心复制模型：leader 找到双方共同的日志前缀，然后用自己的后缀覆盖 follower 的分歧历史。
 
@@ -249,7 +283,9 @@ if quorum_has_matched(index) && index >= leader.term {
 
 这样做的目的和标准 Raft 一样：一旦某个 index 被提交，后续任何合法 leader 都必须包含它，不能再覆盖它。
 
-> TODO(image, P1): 画 quorum commit 图。展示多个节点的 `matched` index，突出 `index >= leader.term` 的限制，以及为什么当前 term 的日志被 quorum 覆盖后才能直接推进 commit。
+![Quorum commit rule](assets/quorum-commit.svg)
+
+_leader 只直接提交 quorum 覆盖且位于当前 leader term 范围内的 index。_
 
 ## 示例
 
@@ -284,7 +320,9 @@ RequestVote retry 有一个更细的边界：如果目标节点已经成功处�
 
 一个可选修补方式是在内存中增加 `voted_for`，记录某个 term 属于哪个 candidate。这样同一个 candidate 对同一个 term 的重试可以被识别并再次返回 granted。这个字段不一定要持久化：如果节点重启后丢失了 `voted_for`，它可以保守地拒绝所有使用本地已存在 term 的 `RequestVote`。这会带来一个小的可用性问题，但只发生在节点重启之后；它不会改变已经持久化的日志和 term 关系。
 
-> TODO(image): 画 RequestVote retry failure。第一步 follower 接受请求并写入 `terms[req.term]`，第二步 reply 丢失，第三步 candidate 重试，第四步 follower 因为该 term 已存在而拒绝；旁边画出可选的 in-memory `voted_for` 修补路径。
+![RequestVote retry after lost reply](assets/request-vote-retry.svg)
+
+_如果 RequestVote reply 丢失，重试会遇到已存在的 term；可选的 in-memory `voted_for` 可以改善这个可用性问题。_
 
 这些能力都可以在这个核心模型之外继续加入。本文关注的是最核心的问题：如果 term 来自 log index，Raft 的 election、replication 和 commit 是否仍然能用熟悉的方式表达。
 
