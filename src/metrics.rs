@@ -20,8 +20,8 @@ pub struct Metrics {
     /// Current protocol role.
     pub role: NodeRole,
 
-    /// Active candidacy or leadership term, if this node has one.
-    pub active_term: Option<Term>,
+    /// Value stored in the last term-array slot.
+    pub term: Term,
 
     /// Greatest log index known to be committed by this node.
     pub committed: LogIndex,
@@ -32,7 +32,7 @@ pub struct Metrics {
     /// Next writable log slot.
     pub next_log_slot: LogIndex,
 
-    /// Votes granted to this node in its active term.
+    /// Votes granted to this node during its current candidacy.
     pub granted_votes: Vec<NodeId>,
 
     /// Replication progress keyed by target node id.
@@ -47,7 +47,7 @@ impl Metrics {
             id,
             membership,
             role: NodeRole::Follower,
-            active_term: None,
+            term: 0,
             committed: 0,
             next_term_slot: 0,
             next_log_slot: 0,

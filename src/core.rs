@@ -93,6 +93,7 @@ where
             mailbox: rx,
             metrics_tx,
         };
+        log::info!("spawning raf core node={id}");
         tokio::spawn(core.run());
         Raf::from_core(tx, metrics_rx)
     }
@@ -109,6 +110,7 @@ where
             self.publish_metrics().await;
         }
 
+        log::info!("raf core mailbox closed node={}", self.id);
         Ok(())
     }
 
@@ -159,6 +161,8 @@ where
         let mut replications = BTreeMap::new();
         replications.insert(self.id, ReplicationState::new(self.id, self.storage.cmds_len().await));
 
+        log::info!("starting election node={} term={term}", self.id);
+
         self.leader = Some(LeaderState {
             term,
             granted_votes: std::iter::once(self.id).collect(), // grant self vote
@@ -182,6 +186,12 @@ where
             }
 
             let last_log_id = self.last_log_id().await;
+            let target = *peer;
+
+            log::debug!(
+                "sending RequestVote from={} to={target} term={term} last_log_id={last_log_id:?}",
+                self.id
+            );
 
             let req = RequestVote { term, last_log_id };
 
@@ -189,7 +199,6 @@ where
             let reply_tx = self.mailbox_tx.clone();
 
             let sending_term = term;
-            let target = *peer;
 
             tokio::spawn(async move {
                 match network.request_vote(target, req).await {
@@ -203,7 +212,7 @@ where
                             .ok();
                     }
                     Err(e) => {
-                        eprintln!("failed to send RequestVote to peer {}: {}", target, e);
+                        log::warn!("failed to send RequestVote to peer {target}: {e}");
                     }
                 }
             });
@@ -219,7 +228,8 @@ where
     /// Grant iff both:
     /// 1. `req.term >= local.last_term` — the candidate is not behind the latest term we have
     ///    stored or reserved.
-    /// 2. `req.last_log_id > local.last_log_id` — the candidate's history is fresher than ours.
+    /// 2. `req.last_log_id >= local.last_log_id` — the candidate's history is at least as fresh as
+    ///    ours.
     async fn handle_request_vote(&mut self, req: RequestVote) -> Result<RequestVoteReply, io::Error> {
         let local_next_term_slot = self.storage.terms_len().await;
         let local_last_term = self.storage.last_term().await;
@@ -229,6 +239,11 @@ where
         let local_last_log_id = LogId::new(local_last_cmd_term, local_cmds_len - 1);
 
         if req.term < local_last_term {
+            log::debug!(
+                "rejecting RequestVote node={} req_term={} local_last_term={local_last_term}",
+                self.id,
+                req.term
+            );
             return Ok(RequestVoteReply {
                 granted: false,
                 next_term_slot: local_next_term_slot,
@@ -236,7 +251,12 @@ where
             });
         }
 
-        if req.last_log_id <= local_last_log_id {
+        if req.last_log_id < local_last_log_id {
+            log::debug!(
+                "rejecting RequestVote node={} req_last_log_id={:?} local_last_log_id={local_last_log_id:?}",
+                self.id,
+                req.last_log_id
+            );
             return Ok(RequestVoteReply {
                 granted: false,
                 next_term_slot: local_next_term_slot,
@@ -248,6 +268,12 @@ where
         self.leader = None;
 
         let _len = self.storage.update_terms(local_next_term_slot, &[req.term]).await;
+
+        log::info!(
+            "granted RequestVote node={} req_term={} next_term_slot={local_next_term_slot}",
+            self.id,
+            req.term
+        );
 
         Ok(RequestVoteReply {
             granted: true,
@@ -266,16 +292,34 @@ where
         let leader = self.leader.as_mut()?;
 
         if leader.term != sending_term {
+            log::debug!(
+                "ignoring stale RequestVoteReply node={} target={target} sending_term={sending_term} current_term={}",
+                self.id,
+                leader.term
+            );
             return None;
         }
 
         if reply.granted {
             leader.granted_votes.insert(target);
             let granted_votes = leader.granted_votes.iter().cloned().collect::<Vec<_>>();
-            if self.membership.is_quorum(&granted_votes) {
+            log::info!(
+                "received granted vote node={} from={target} term={} votes={}",
+                self.id,
+                leader.term,
+                granted_votes.len()
+            );
+            if !leader.established && self.membership.is_quorum(&granted_votes) {
                 self.establish_leader().await;
             }
         } else {
+            log::warn!(
+                "stepping down after rejected vote node={} target={target} term={} responder_next_term_slot={} responder_last_log_id={:?}",
+                self.id,
+                leader.term,
+                reply.next_term_slot,
+                reply.last_log_id
+            );
             self.leader = None;
             // TODO: save max-term-len
         }
@@ -313,6 +357,13 @@ where
             replication.matched = cmds_len - 1;
             replication.end = cmds_len;
         }
+
+        log::info!(
+            "established leader node={} term={} next_log_slot={}",
+            self.id,
+            leader.term,
+            self.storage.cmds_len().await
+        );
     }
 
     /// Try to dispatch one append RPC for every peer without an in-flight append.
@@ -357,13 +408,21 @@ where
                 cmds,
             };
             let target = replication.target;
+            log::debug!(
+                "sending Append from={} to={target} term={} start={} terms={} cmds={}",
+                self.id,
+                leader.term,
+                append_request.assume_matched_at,
+                append_request.terms.len(),
+                append_request.cmds.len()
+            );
 
             tokio::spawn(async move {
                 let _permit = permit;
 
                 let reply = net.append(target, append_request).await;
                 let Ok(reply) = reply else {
-                    eprintln!("failed to send Append to peer {}: {}", target, reply.err().unwrap());
+                    log::warn!("failed to send Append to peer {target}: {}", reply.err().unwrap());
                     return;
                 };
 
@@ -384,6 +443,11 @@ where
             // TODO: save last-seen, instead of updating terms. Updating terms means accepting a
             // RequestVote.
         } else if append.term < last_term {
+            log::debug!(
+                "rejecting stale Append node={} append_term={} local_last_term={last_term}",
+                self.id,
+                append.term
+            );
             return Ok(AppendReply {
                 term: last_term,
                 matched: None,
@@ -411,6 +475,7 @@ where
         }
 
         let Some(last_matched) = last_matched else {
+            log::debug!("Append conflict node={} start={start}", self.id);
             return Ok(AppendReply {
                 term: last_term,
                 matched: None,
@@ -428,6 +493,13 @@ where
         if append_from < append.cmds.len() {
             self.storage.append_cmds(append.cmds[append_from..].to_vec()).await;
         }
+
+        log::debug!(
+            "accepted Append node={} term={} matched_index={}",
+            self.id,
+            append.term,
+            append.assume_matched_at + append.terms.len() as u64 - 1
+        );
 
         Ok(AppendReply {
             term: last_term,
@@ -451,6 +523,12 @@ where
 
         if reply.term > leader.term {
             // TODO: save last seen
+            log::warn!(
+                "stepping down after newer AppendReply term node={} target={target} current_term={} reply_term={}",
+                self.id,
+                leader.term,
+                reply.term
+            );
             self.leader = None;
             return;
         }
@@ -461,11 +539,20 @@ where
         };
 
         if let Some(conflict) = reply.conflict {
+            log::debug!(
+                "Append conflict reply node={} target={target} conflict={conflict}",
+                self.id
+            );
             replication.end = conflict;
             return;
         }
 
         if let Some(matched) = reply.matched {
+            log::debug!(
+                "Append matched reply node={} target={target} matched_index={}",
+                self.id,
+                matched.index
+            );
             replication.matched = matched.index;
 
             self.try_update_committed().await;
@@ -498,6 +585,11 @@ where
         }
 
         if committed > self.committed {
+            log::info!(
+                "advanced commit node={} from={} to={committed}",
+                self.id,
+                self.committed
+            );
             self.committed = committed;
 
             self.respond_write_replies(committed).await;
@@ -531,11 +623,13 @@ where
     /// different node".
     async fn handle_write(&mut self, req: WriteRequest, reply_tx: oneshot::Sender<Result<WriteReply, io::Error>>) {
         let Some(leader) = self.leader.as_mut() else {
+            log::warn!("rejecting write on follower node={} app_id={}", self.id, req.id);
             reply_tx.send(Err(io::Error::other("not a leader; cannot handle write requests"))).ok();
             return;
         };
 
         if !leader.established {
+            log::warn!("rejecting write on candidate node={} app_id={}", self.id, req.id);
             reply_tx.send(Err(io::Error::other("not a leader; cannot handle write requests"))).ok();
             return;
         }
@@ -551,10 +645,15 @@ where
     /// index once a quorum has acked, and (4) reply with that index.
     async fn dispatch_leader_write(
         &mut self,
-        _req: WriteRequest,
+        req: WriteRequest,
         reply_tx: oneshot::Sender<Result<WriteReply, io::Error>>,
     ) {
         let Some(leader) = self.leader.as_mut() else {
+            log::warn!(
+                "rejecting write without leader state node={} app_id={}",
+                self.id,
+                req.id
+            );
             reply_tx.send(Err(io::Error::other("not a leader; cannot handle write requests"))).ok();
             return;
         };
@@ -568,6 +667,12 @@ where
             replication.end = self.storage.cmds_len().await;
         }
         leader.pending_writes.push_back((index, reply_tx));
+        log::info!(
+            "accepted leader write node={} app_id={} term={} index={index}",
+            self.id,
+            req.id,
+            leader.term
+        );
     }
 
     /// Return the last log id derived from the command length and term array.
@@ -594,7 +699,7 @@ where
 
     /// Build the current metrics snapshot from Core-owned state.
     async fn metrics_snapshot(&self) -> Metrics {
-        let (role, active_term, mut granted_votes, replications) = match self.leader.as_ref() {
+        let (role, mut granted_votes, replications) = match self.leader.as_ref() {
             Some(leader) => {
                 let role = if leader.established {
                     NodeRole::Leader
@@ -608,9 +713,9 @@ where
                     .map(|(target, replication)| (*target, ReplicationMetrics::from_replication_state(replication)))
                     .collect::<BTreeMap<_, _>>();
 
-                (role, Some(leader.term), granted_votes, replications)
+                (role, granted_votes, replications)
             }
-            None => (NodeRole::Follower, None, Vec::new(), BTreeMap::new()),
+            None => (NodeRole::Follower, Vec::new(), BTreeMap::new()),
         };
 
         granted_votes.sort_unstable();
@@ -619,7 +724,7 @@ where
             id: self.id,
             membership: self.membership.node_ids().to_vec(),
             role,
-            active_term,
+            term: self.storage.last_term().await,
             committed: self.committed,
             next_term_slot: self.storage.terms_len().await,
             next_log_slot: self.storage.cmds_len().await,
@@ -747,7 +852,7 @@ mod tests {
 
         let metrics = core.metrics_snapshot().await;
         assert_eq!(metrics.role, NodeRole::Leader);
-        assert_eq!(metrics.active_term, Some(10));
+        assert_eq!(metrics.term, 1);
         assert_eq!(metrics.committed, 12);
         assert_eq!(metrics.granted_votes, vec![1, 2, 3]);
         assert_eq!(metrics.replications.len(), 4);

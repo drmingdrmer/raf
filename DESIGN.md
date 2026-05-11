@@ -47,7 +47,7 @@ leader 之后追加的新日志项都使用同一个 `leader.term`。
 - `Event`：Core 的内部事件，包括 `Elect`、`RequestVote`、`RequestVoteReply`、`Append`、`AppendReply`、`Write`。
 - `Network`：Core 用它向其它节点发送 outbound `RequestVote` 和 `Append`。
 - `InProcessNetwork`：进程内 `Network` 实现，用 `NodeId -> Raf` 路由表把 RPC 转发给目标节点。
-- `RafMetrics`：公开 metrics 快照，应用可通过 `Raf::metrics()` 订阅 role、commit index、term slot、log slot 和 replication progress 变化。
+- `Metrics`：公开 metrics 快照，应用可通过 `Raf::metrics()` 订阅 role、当前 term、commit index、term slot、log slot 和 replication progress 变化。`term` 来自 term array 最后一项。
 - `LeaderState`：候选人或 leader 的内存态，包括当前 term、已获投票集合、是否 established、replication state 和 pending writes。
 - `ReplicationState`：leader 对单个 peer 的复制状态，包括 `matched`、`end` 和 per-peer inflight gate。
 
@@ -111,10 +111,10 @@ leader 发给 peer，用于探测匹配点并复制日志窗口。
 1. 读取本地最后一个 term slot，得到 `local_last_term`。
 2. 读取本地最后一条 command 对应的 `local_last_log_id`。
 3. 如果 `req.term < local_last_term`，拒绝。
-4. 如果 `req.last_log_id <= local_last_log_id`，拒绝。
+4. 如果 `req.last_log_id < local_last_log_id`，拒绝。
 5. 否则清空本地 `leader` 内存态，写入新的 term slot，并返回 `granted = true`。
 
-当前实现使用严格 freshness：相同日志不会通过 `RequestVote`。
+当前实现和标准 Raft 一样接受相同 freshness：候选人的日志不落后即可。
 
 ### 处理 RequestVoteReply
 
