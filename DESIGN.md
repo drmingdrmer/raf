@@ -52,6 +52,7 @@ i >= terms[i]
 
 - `Raf`：公开 API。负责把本地 election、入站 RPC、application write 转成 `Event` 发给 `Core`。
 - `Core`：单线程 mailbox event loop。所有协议状态变更都在这里串行执行。
+- `Storage`：持久化 term array 和 command array；所有操作返回 `io::Result`。
 - `Event`：Core 的内部事件，包括 `Elect`、`RequestVote`、`RequestVoteReply`、`Append`、`AppendReply`、`Write`。
 - `Network`：Core 用它向其它节点发送 outbound `RequestVote` 和 `Append`。
 - `InProcessNetwork`：进程内 `Network` 实现，用 `NodeId -> Raf` 路由表把 RPC 转发给目标节点。
@@ -60,6 +61,8 @@ i >= terms[i]
 - `ReplicationState`：leader 对单个 peer 的复制状态，包括 `matched`、`end` 和 per-peer inflight gate。
 
 `Core::run()` 每次从 mailbox 取一个 `Event`，调用 `handle_event()` 处理；处理完任何事件后，都会调用 `try_initialize_replication()` 尝试继续派发复制 RPC。若当前节点不是 established leader，该函数直接 no-op。
+
+Storage IO error 是 Core-local fatal error：Core 记录错误并退出，不把底层 IO error 作为 RPC 或 control handle 的返回值传播。调用者只会观察到 reply channel dropped 或 Core mailbox closed。
 
 ## 消息
 

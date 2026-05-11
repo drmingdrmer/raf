@@ -38,23 +38,26 @@ impl Default for MemStorage {
 }
 
 impl Storage for MemStorage {
-    async fn update_terms(&mut self, since: u64, terms: &[Term]) {
+    async fn update_terms(&mut self, since: u64, terms: &[Term]) -> std::io::Result<()> {
         self.terms.update_terms(since, terms);
+        Ok(())
     }
 
-    async fn read_terms(&self, range: Range<u64>) -> ArrayChunk<Term> {
-        self.terms.read_terms(range)
+    async fn read_terms(&self, range: Range<u64>) -> std::io::Result<ArrayChunk<Term>> {
+        Ok(self.terms.read_terms(range))
     }
 
-    async fn append_cmds(&mut self, cmds: Vec<Cmd>) {
+    async fn append_cmds(&mut self, cmds: Vec<Cmd>) -> std::io::Result<()> {
         self.cmds.append_cmds(cmds);
+        Ok(())
     }
 
-    async fn truncate_cmds(&mut self, after: u64) {
+    async fn truncate_cmds(&mut self, after: u64) -> std::io::Result<()> {
         self.cmds.truncate_cmds(after);
+        Ok(())
     }
 
-    async fn read_cmds(&self, range: Range<u64>) -> ArrayChunk<Cmd> {
-        self.cmds.read_cmds(range)
+    async fn read_cmds(&self, range: Range<u64>) -> std::io::Result<ArrayChunk<Cmd>> {
+        Ok(self.cmds.read_cmds(range))
     }
 }

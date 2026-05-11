@@ -101,13 +101,20 @@ where
     /// Single-mailbox event loop. All inbound traffic — application
     /// commands, network requests, network responses — arrives here as
     /// an [`Event`] and is dispatched inline.
-    async fn run(mut self) -> Result<(), io::Error> {
-        self.publish_metrics().await;
+    async fn run(mut self) {
+        if let Err(e) = self.run_loop().await {
+            log::error!("raf core stopped with error node={}: {e}", self.id);
+        }
+    }
+
+    /// Fallible body of the single-mailbox event loop.
+    async fn run_loop(&mut self) -> Result<(), io::Error> {
+        self.publish_metrics().await?;
 
         while let Some(event) = self.mailbox.recv().await {
             self.handle_event(event).await?;
-            self.try_initialize_replication().await;
-            self.publish_metrics().await;
+            self.try_initialize_replication().await?;
+            self.publish_metrics().await?;
         }
 
         log::info!("raf core mailbox closed node={}", self.id);
@@ -129,7 +136,7 @@ where
                 target,
                 reply,
             } => {
-                self.handle_request_vote_reply(sending_term, target, reply).await;
+                self.handle_request_vote_reply(sending_term, target, reply).await?;
             }
             Event::Append { req, reply_tx } => {
                 let reply = self.handle_append(req).await?;
@@ -140,10 +147,10 @@ where
                 target,
                 reply,
             } => {
-                self.handle_append_reply(sending_term, target, reply).await;
+                self.handle_append_reply(sending_term, target, reply).await?;
             }
             Event::Write { req, reply_tx } => {
-                self.handle_write(req, reply_tx).await;
+                self.handle_write(req, reply_tx).await?;
             }
         }
 
@@ -157,9 +164,9 @@ where
 
     /// Create candidate state, reserve the local term slot, and send vote RPCs.
     async fn do_elect(&mut self) -> Result<(), io::Error> {
-        let term = self.storage.terms_len().await;
+        let term = self.storage.terms_len().await?;
         let mut replications = BTreeMap::new();
-        replications.insert(self.id, ReplicationState::new(self.id, self.storage.cmds_len().await));
+        replications.insert(self.id, ReplicationState::new(self.id, self.storage.cmds_len().await?));
 
         log::info!("starting election node={} term={term}", self.id);
 
@@ -171,11 +178,11 @@ where
             pending_writes: Default::default(),
         });
 
-        self.storage.update_terms(term, &[term]).await;
+        self.storage.update_terms(term, &[term]).await?;
 
         let granted_votes = self.leader.as_ref().unwrap().granted_votes.iter().copied().collect::<Vec<_>>();
         if self.membership.is_quorum(&granted_votes) {
-            self.establish_leader().await;
+            self.establish_leader().await?;
         } else {
             self.spawn_request_vote_rpcs(term).await?;
         }
@@ -190,7 +197,7 @@ where
                 continue;
             }
 
-            let last_log_id = self.last_log_id().await;
+            let last_log_id = self.last_log_id().await?;
             let target = *peer;
 
             log::debug!(
@@ -236,11 +243,11 @@ where
     /// 2. `req.last_log_id >= local.last_log_id` — the candidate's history is at least as fresh as
     ///    ours.
     async fn handle_request_vote(&mut self, req: RequestVote) -> Result<RequestVoteReply, io::Error> {
-        let local_next_term_slot = self.storage.terms_len().await;
-        let local_last_term = self.storage.last_term().await;
+        let local_next_term_slot = self.storage.terms_len().await?;
+        let local_last_term = self.storage.last_term().await?;
 
-        let local_cmds_len = self.storage.cmds_len().await;
-        let local_last_cmd_term = self.storage.read_one_term(local_cmds_len - 1).await;
+        let local_cmds_len = self.storage.cmds_len().await?;
+        let local_last_cmd_term = self.storage.read_one_term(local_cmds_len - 1).await?;
         let local_last_log_id = LogId::new(local_last_cmd_term, local_cmds_len - 1);
 
         let reply = RequestVoteReply {
@@ -282,7 +289,7 @@ where
         // reset all leader or candidate
         self.leader = None;
 
-        let _len = self.storage.update_terms(local_next_term_slot, &[req.term]).await;
+        self.storage.update_terms(local_next_term_slot, &[req.term]).await?;
 
         log::info!(
             "granted RequestVote node={} req_term={} next_term_slot={local_next_term_slot}",
@@ -299,8 +306,10 @@ where
         sending_term: Term,
         target: NodeId,
         reply: RequestVoteReply,
-    ) -> Option<()> {
-        let leader = self.leader.as_mut()?;
+    ) -> Result<(), io::Error> {
+        let Some(leader) = self.leader.as_mut() else {
+            return Ok(());
+        };
 
         if leader.term != sending_term {
             log::debug!(
@@ -308,7 +317,7 @@ where
                 self.id,
                 leader.term
             );
-            return None;
+            return Ok(());
         }
 
         if reply.granted {
@@ -321,7 +330,7 @@ where
                 granted_votes.len()
             );
             if !leader.established && self.membership.is_quorum(&granted_votes) {
-                self.establish_leader().await;
+                self.establish_leader().await?;
             }
         } else {
             log::warn!(
@@ -334,15 +343,15 @@ where
             self.leader = None;
             // TODO: save max-term-len
         }
-        None
+        Ok(())
     }
 
     /// Turn candidate state into established leader state.
-    async fn establish_leader(&mut self) {
+    async fn establish_leader(&mut self) -> Result<(), io::Error> {
         let leader = self.leader.as_mut().unwrap();
         leader.established = true;
 
-        let cmds_len = self.storage.cmds_len().await;
+        let cmds_len = self.storage.cmds_len().await?;
 
         for target in self.membership.node_ids().iter().cloned() {
             if target == self.id {
@@ -354,37 +363,40 @@ where
             leader.replications.insert(target, replication);
         }
 
-        let cmds_len = self.storage.cmds_len().await;
-        let n = self.storage.terms_len().await - cmds_len;
+        let cmds_len = self.storage.cmds_len().await?;
+        let n = self.storage.terms_len().await? - cmds_len;
 
-        self.storage.fill_terms_gap(cmds_len).await;
+        self.storage.fill_terms_gap(cmds_len).await?;
 
         // Occupy all entries with no-op Cmd.
         let cmds = vec![Cmd::empty(); n as usize];
-        self.storage.append_cmds(cmds).await;
+        self.storage.append_cmds(cmds).await?;
 
         if let Some(replication) = leader.replications.get_mut(&self.id) {
-            let cmds_len = self.storage.cmds_len().await;
+            let cmds_len = self.storage.cmds_len().await?;
             replication.matched = cmds_len - 1;
             replication.end = cmds_len;
         }
 
+        let cmds_len = self.storage.cmds_len().await?;
         log::info!(
             "established leader node={} term={} next_log_slot={}",
             self.id,
             leader.term,
-            self.storage.cmds_len().await
+            cmds_len
         );
+
+        Ok(())
     }
 
     /// Try to dispatch one append RPC for every peer without an in-flight append.
-    async fn try_initialize_replication(&mut self) {
+    async fn try_initialize_replication(&mut self) -> Result<(), io::Error> {
         let Some(leader) = self.leader.as_mut() else {
-            return;
+            return Ok(());
         };
 
         if !leader.established {
-            return;
+            return Ok(());
         }
 
         let sending_term = leader.term;
@@ -410,8 +422,8 @@ where
             // TODO: len should not exceed cmds.len()
 
             // includes the last matched, will be used in the role of `prev`
-            let terms = self.storage.read_terms(start..start + len).await.entries;
-            let cmds = self.storage.read_cmds(start..start + len).await.entries;
+            let terms = self.storage.read_terms(start..start + len).await?.entries;
+            let cmds = self.storage.read_cmds(start..start + len).await?.entries;
 
             let append_request = AppendRequest {
                 term: leader.term,
@@ -447,6 +459,8 @@ where
                 .ok();
             });
         }
+
+        Ok(())
     }
 
     /// Handle an inbound append request from a leader.
@@ -457,7 +471,7 @@ where
             "AppendRequest terms and cmds must have the same length"
         );
 
-        let last_term = self.storage.last_term().await;
+        let last_term = self.storage.last_term().await?;
         if append.terms.is_empty() {
             log::debug!("ignoring empty Append node={} append_term={}", self.id, append.term);
             return Ok(AppendReply {
@@ -495,11 +509,11 @@ where
 
         let start = append.assume_matched_at;
         let end = append.assume_matched_at + append.terms.len() as u64;
-        let end = end.min(self.storage.cmds_len().await);
+        let end = end.min(self.storage.cmds_len().await?);
 
         // find the matches
 
-        let local_terms = self.storage.read_terms(start..end).await.entries;
+        let local_terms = self.storage.read_terms(start..end).await?.entries;
         let mut last_matched = None;
 
         for i in start..end {
@@ -520,14 +534,14 @@ where
         };
 
         if last_matched < end - 1 {
-            self.storage.truncate_cmds(last_matched + 1).await;
+            self.storage.truncate_cmds(last_matched + 1).await?;
         }
 
-        self.storage.update_terms(append.assume_matched_at, &append.terms).await;
+        self.storage.update_terms(append.assume_matched_at, &append.terms).await?;
 
-        let append_from = self.storage.cmds_len().await.saturating_sub(append.assume_matched_at) as usize;
+        let append_from = self.storage.cmds_len().await?.saturating_sub(append.assume_matched_at) as usize;
         if append_from < append.cmds.len() {
-            self.storage.append_cmds(append.cmds[append_from..].to_vec()).await;
+            self.storage.append_cmds(append.cmds[append_from..].to_vec()).await?;
         }
 
         let appended_last_index = append.assume_matched_at + append.terms.len() as u64 - 1;
@@ -556,13 +570,18 @@ where
     }
 
     /// Handle one append reply from a replication target.
-    async fn handle_append_reply(&mut self, sending_term: Term, target: NodeId, reply: AppendReply) {
+    async fn handle_append_reply(
+        &mut self,
+        sending_term: Term,
+        target: NodeId,
+        reply: AppendReply,
+    ) -> Result<(), io::Error> {
         let Some(leader) = self.leader.as_mut() else {
-            return;
+            return Ok(());
         };
 
         if leader.term != sending_term {
-            return;
+            return Ok(());
         }
 
         if reply.term > leader.term {
@@ -574,12 +593,12 @@ where
                 reply.term
             );
             self.leader = None;
-            return;
+            return Ok(());
         }
 
         let Some(replication) = leader.replications.get_mut(&target) else {
             // target is removed.
-            return;
+            return Ok(());
         };
 
         if let Some(conflict) = reply.conflict {
@@ -588,7 +607,7 @@ where
                 self.id
             );
             replication.end = conflict;
-            return;
+            return Ok(());
         }
 
         if let Some(matched) = reply.matched {
@@ -602,6 +621,8 @@ where
 
             self.try_update_committed().await;
         }
+
+        Ok(())
     }
 
     /// Advance the node commit index if a quorum has matched a newer index.
@@ -666,20 +687,24 @@ where
     /// (follower, or candidate still gathering votes) returns an
     /// `io::Error` — the application interprets that as "talk to a
     /// different node".
-    async fn handle_write(&mut self, req: WriteRequest, reply_tx: oneshot::Sender<Result<WriteReply, io::Error>>) {
+    async fn handle_write(
+        &mut self,
+        req: WriteRequest,
+        reply_tx: oneshot::Sender<Result<WriteReply, io::Error>>,
+    ) -> Result<(), io::Error> {
         let Some(leader) = self.leader.as_mut() else {
             log::warn!("rejecting write on follower node={} app_id={}", self.id, req.id);
             reply_tx.send(Err(io::Error::other("not a leader; cannot handle write requests"))).ok();
-            return;
+            return Ok(());
         };
 
         if !leader.established {
             log::warn!("rejecting write on candidate node={} app_id={}", self.id, req.id);
             reply_tx.send(Err(io::Error::other("not a leader; cannot handle write requests"))).ok();
-            return;
+            return Ok(());
         }
 
-        self.dispatch_leader_write(req, reply_tx).await;
+        self.dispatch_leader_write(req, reply_tx).await
     }
 
     /// Append a leader-side write and reply once it reaches quorum commit.
@@ -687,7 +712,7 @@ where
         &mut self,
         req: WriteRequest,
         reply_tx: oneshot::Sender<Result<WriteReply, io::Error>>,
-    ) {
+    ) -> Result<(), io::Error> {
         let Some(leader) = self.leader.as_mut() else {
             log::warn!(
                 "rejecting write without leader state node={} app_id={}",
@@ -695,16 +720,18 @@ where
                 req.id
             );
             reply_tx.send(Err(io::Error::other("not a leader; cannot handle write requests"))).ok();
-            return;
+            return Ok(());
         };
 
-        self.storage.update_terms(self.storage.cmds_len().await, &[leader.term]).await;
-        self.storage.append_cmds(vec![Cmd::empty()]).await;
+        let cmds_len = self.storage.cmds_len().await?;
+        self.storage.update_terms(cmds_len, &[leader.term]).await?;
+        self.storage.append_cmds(vec![Cmd::empty()]).await?;
 
-        let index = self.storage.cmds_len().await - 1;
+        let cmds_len = self.storage.cmds_len().await?;
+        let index = cmds_len - 1;
         if let Some(replication) = leader.replications.get_mut(&self.id) {
             replication.matched = index;
-            replication.end = self.storage.cmds_len().await;
+            replication.end = cmds_len;
         }
         leader.pending_writes.push_back((index, reply_tx));
         log::info!(
@@ -713,19 +740,21 @@ where
             req.id,
             leader.term
         );
+
+        Ok(())
     }
 
     /// Return the last log id derived from the command length and term array.
-    async fn last_log_id(&self) -> LogId {
-        let cmds_len = self.storage.cmds_len().await;
+    async fn last_log_id(&self) -> Result<LogId, io::Error> {
+        let cmds_len = self.storage.cmds_len().await?;
         let index = cmds_len - 1;
-        let last_term = self.storage.read_one_term(index).await;
-        LogId::new(last_term, index)
+        let last_term = self.storage.read_one_term(index).await?;
+        Ok(LogId::new(last_term, index))
     }
 
     /// Publish a metrics snapshot if it differs from the last one.
-    async fn publish_metrics(&self) {
-        let metrics = self.metrics_snapshot().await;
+    async fn publish_metrics(&self) -> Result<(), io::Error> {
+        let metrics = self.metrics_snapshot().await?;
 
         self.metrics_tx.send_if_modified(|current| {
             if current == &metrics {
@@ -735,10 +764,12 @@ where
                 true
             }
         });
+
+        Ok(())
     }
 
     /// Build the current metrics snapshot from Core-owned state.
-    async fn metrics_snapshot(&self) -> Metrics {
+    async fn metrics_snapshot(&self) -> Result<Metrics, io::Error> {
         let (role, mut granted_votes, replications) = match self.leader.as_ref() {
             Some(leader) => {
                 let role = if leader.established {
@@ -760,28 +791,30 @@ where
 
         granted_votes.sort_unstable();
 
-        Metrics {
+        Ok(Metrics {
             id: self.id,
             membership: self.membership.node_ids().to_vec(),
             role,
-            term: self.storage.last_term().await,
+            term: self.storage.last_term().await?,
             committed: self.committed,
-            next_term_slot: self.storage.terms_len().await,
-            next_log_slot: self.storage.cmds_len().await,
+            next_term_slot: self.storage.terms_len().await?,
+            next_log_slot: self.storage.cmds_len().await?,
             granted_votes,
             replications,
-        }
+        })
     }
 }
 
 #[cfg(test)]
 mod tests {
     use std::io;
+    use std::ops::Range;
     use std::sync::Arc;
 
     use tokio::sync::mpsc::unbounded_channel;
 
     use super::*;
+    use crate::ArrayChunk;
     use crate::append_reply::AppendReply;
     use crate::append_request::AppendRequest;
     use crate::cmd_array::CmdArray;
@@ -800,12 +833,46 @@ mod tests {
         }
     }
 
+    struct FailingUpdateStorage {
+        inner: MemStorage,
+    }
+
+    impl Storage for FailingUpdateStorage {
+        async fn update_terms(&mut self, _since: u64, _terms: &[Term]) -> io::Result<()> {
+            Err(io::Error::other("term update failed"))
+        }
+
+        async fn read_terms(&self, range: Range<u64>) -> io::Result<ArrayChunk<Term>> {
+            self.inner.read_terms(range).await
+        }
+
+        async fn append_cmds(&mut self, cmds: Vec<Cmd>) -> io::Result<()> {
+            self.inner.append_cmds(cmds).await
+        }
+
+        async fn truncate_cmds(&mut self, after: u64) -> io::Result<()> {
+            self.inner.truncate_cmds(after).await
+        }
+
+        async fn read_cmds(&self, range: Range<u64>) -> io::Result<ArrayChunk<Cmd>> {
+            self.inner.read_cmds(range).await
+        }
+    }
+
     fn new_core(terms: Vec<Term>, cmds_len: usize, membership: Membership) -> Core<MemStorage, NoopNetwork> {
+        new_core_with_storage(
+            MemStorage::from_arrays(TermArray::new(terms), CmdArray::new(vec![Cmd::empty(); cmds_len])),
+            membership,
+        )
+    }
+
+    fn new_core_with_storage<S>(storage: S, membership: Membership) -> Core<S, NoopNetwork>
+    where S: Storage {
         let (mailbox_tx, mailbox) = unbounded_channel();
         let (metrics_tx, _) = watch::channel(Metrics::initial(1, membership.node_ids().to_vec()));
 
         Core {
-            storage: MemStorage::from_arrays(TermArray::new(terms), CmdArray::new(vec![Cmd::empty(); cmds_len])),
+            storage,
             network: Arc::new(NoopNetwork),
             id: 1,
             membership,
@@ -831,8 +898,8 @@ mod tests {
 
         let reply = core.handle_append(append).await.unwrap();
 
-        assert_eq!(core.storage.terms_len().await, 4);
-        assert_eq!(core.storage.cmds_len().await, 4);
+        assert_eq!(core.storage.terms_len().await.unwrap(), 4);
+        assert_eq!(core.storage.cmds_len().await.unwrap(), 4);
         assert_eq!(reply.matched.unwrap(), LogId::new(1, 3));
 
         let append = AppendRequest {
@@ -845,8 +912,8 @@ mod tests {
 
         let reply = core.handle_append(append).await.unwrap();
 
-        assert_eq!(core.storage.terms_len().await, 4);
-        assert_eq!(core.storage.cmds_len().await, 4);
+        assert_eq!(core.storage.terms_len().await.unwrap(), 4);
+        assert_eq!(core.storage.cmds_len().await.unwrap(), 4);
         assert_eq!(reply.matched.unwrap(), LogId::new(1, 3));
     }
 
@@ -892,7 +959,7 @@ mod tests {
 
         assert_eq!(core.committed, 12);
 
-        let metrics = core.metrics_snapshot().await;
+        let metrics = core.metrics_snapshot().await.unwrap();
         assert_eq!(metrics.role, NodeRole::Leader);
         assert_eq!(metrics.term, 1);
         assert_eq!(metrics.committed, 12);
@@ -926,11 +993,35 @@ mod tests {
             matched: Some(LogId::new(1, 5)),
             conflict: None,
         })
-        .await;
+        .await
+        .unwrap();
 
         let replication = &core.leader.as_ref().unwrap().replications[&2];
         assert_eq!(replication.matched, 5);
         assert_eq!(replication.end, 6);
+    }
+
+    #[tokio::test]
+    async fn handle_write_drops_reply_on_storage_error() {
+        let storage = FailingUpdateStorage {
+            inner: MemStorage::from_arrays(TermArray::new(vec![0, 1]), CmdArray::new(vec![Cmd::empty(); 2])),
+        };
+        let mut core = new_core_with_storage(storage, Membership::new(vec![1, 2, 3]));
+
+        core.leader = Some(LeaderState {
+            term: 1,
+            granted_votes: [1, 2].into(),
+            established: true,
+            replications: Default::default(),
+            pending_writes: Default::default(),
+        });
+
+        let (reply_tx, reply_rx) = oneshot::channel();
+
+        let err = core.handle_write(WriteRequest { id: 1 }, reply_tx).await.unwrap_err();
+
+        assert_eq!(err.to_string(), "term update failed");
+        assert!(reply_rx.await.is_err());
     }
 
     #[tokio::test]
@@ -944,7 +1035,7 @@ mod tests {
 
         let reply = core.handle_request_vote(req.clone()).await.unwrap();
         assert!(reply.granted);
-        assert_eq!(core.storage.terms_len().await, 2);
+        assert_eq!(core.storage.terms_len().await.unwrap(), 2);
 
         let reply = core.handle_request_vote(req).await.unwrap();
         assert!(!reply.granted);
@@ -960,10 +1051,10 @@ mod tests {
         let leader = core.leader.as_ref().unwrap();
         assert!(leader.established);
         assert!(leader.granted_votes.contains(&1));
-        assert_eq!(core.storage.terms_len().await, 2);
-        assert_eq!(core.storage.cmds_len().await, 2);
+        assert_eq!(core.storage.terms_len().await.unwrap(), 2);
+        assert_eq!(core.storage.cmds_len().await.unwrap(), 2);
 
-        let metrics = core.metrics_snapshot().await;
+        let metrics = core.metrics_snapshot().await.unwrap();
         assert_eq!(metrics.role, NodeRole::Leader);
         assert_eq!(metrics.term, 1);
     }
@@ -992,7 +1083,7 @@ mod tests {
 
         assert_eq!(reply.matched.unwrap(), LogId::new(1, 1));
         assert!(core.leader.is_none());
-        assert_eq!(core.storage.cmds_len().await, 2);
+        assert_eq!(core.storage.cmds_len().await.unwrap(), 2);
     }
 
     #[tokio::test]
@@ -1048,8 +1139,8 @@ mod tests {
         assert_eq!(reply.term, 1);
         assert!(reply.matched.is_none());
         assert!(reply.conflict.is_none());
-        assert_eq!(core.storage.terms_len().await, 2);
-        assert_eq!(core.storage.cmds_len().await, 2);
+        assert_eq!(core.storage.terms_len().await.unwrap(), 2);
+        assert_eq!(core.storage.cmds_len().await.unwrap(), 2);
     }
 
     #[tokio::test]
