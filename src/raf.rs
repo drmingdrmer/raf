@@ -5,10 +5,12 @@ use std::sync::Arc;
 
 use tokio::sync::mpsc::UnboundedSender;
 use tokio::sync::oneshot;
+use tokio::sync::watch;
 
 use crate::AppendReply;
 use crate::AppendRequest;
 use crate::Membership;
+use crate::Metrics;
 use crate::NodeId;
 use crate::Storage;
 use crate::WriteReply;
@@ -21,14 +23,16 @@ use crate::request_vote_reply::RequestVoteReply;
 
 /// A running `raf` node.
 ///
-/// Internally a thin wrapper around the Core's mailbox sender, so
-/// cloning is cheap (an `Arc` bump). The application clones it
-/// freely; both the application and the inbound transport drive
-/// the Core through this type.
+/// Internally a thin wrapper around the Core's mailbox sender and
+/// metrics receiver. Cloning is cheap; both the application and the
+/// inbound transport drive the Core through this type.
 #[derive(Clone)]
 pub struct Raf {
     /// Sender used by public APIs to enqueue work in the Core mailbox.
     mailbox_tx: UnboundedSender<Event>,
+
+    /// Receiver used to subscribe to Core metrics updates.
+    metrics_rx: watch::Receiver<Metrics>,
 }
 
 impl Raf {
@@ -44,14 +48,27 @@ impl Raf {
         S: Storage + 'static,
         N: Network,
     {
-        let mailbox_tx = Core::spawn(id, membership, storage, Arc::new(network));
-        Self { mailbox_tx }
+        Core::spawn(id, membership, storage, Arc::new(network))
+    }
+
+    /// Build a handle from Core-owned communication endpoints.
+    pub(crate) fn from_core(mailbox_tx: UnboundedSender<Event>, metrics_rx: watch::Receiver<Metrics>) -> Self {
+        Self { mailbox_tx, metrics_rx }
     }
 
     /// `true` once the Core task has terminated and is no longer
     /// accepting events.
     pub fn is_closed(&self) -> bool {
         self.mailbox_tx.is_closed()
+    }
+
+    /// Subscribe to metrics changes for this node.
+    ///
+    /// The returned watch receiver immediately exposes the latest
+    /// known [`Metrics`] snapshot and can be awaited for future
+    /// changes.
+    pub fn metrics(&self) -> watch::Receiver<Metrics> {
+        self.metrics_rx.clone()
     }
 
     /// Trigger a local election attempt.

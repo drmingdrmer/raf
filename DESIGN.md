@@ -47,7 +47,8 @@ leader 之后追加的新日志项都使用同一个 `leader.term`。
 - `Event`：Core 的内部事件，包括 `Elect`、`RequestVote`、`RequestVoteReply`、`Append`、`AppendReply`、`Write`。
 - `Network`：Core 用它向其它节点发送 outbound `RequestVote` 和 `Append`。
 - `InProcessNetwork`：进程内 `Network` 实现，用 `NodeId -> Raf` 路由表把 RPC 转发给目标节点。
-- `LeaderState`：候选人或 leader 的内存态，包括当前 term、已获投票集合、是否 established、每个 peer 的 replication state、已提交 index。
+- `RafMetrics`：公开 metrics 快照，应用可通过 `Raf::metrics()` 订阅 role、commit index、term slot、log slot 和 replication progress 变化。
+- `LeaderState`：候选人或 leader 的内存态，包括当前 term、已获投票集合、是否 established、replication state 和 pending writes。
 - `ReplicationState`：leader 对单个 peer 的复制状态，包括 `matched`、`end` 和 per-peer inflight gate。
 
 `Core::run()` 每次从 mailbox 取一个 `Event`，调用 `handle_event()` 处理；处理完任何事件后，都会调用 `try_initialize_replication()` 尝试继续派发复制 RPC。若当前节点不是 established leader，该函数直接 no-op。
@@ -177,14 +178,14 @@ leader 收到 `AppendReply`：
 
 ## Commit
 
-leader 根据所有 peer 的 `matched` 计算 commit index：
+leader 根据所有 replication state 的 `matched` 计算节点级 commit index。replication state 包括 leader 自身：
 
 1. 只考虑 `matched >= leader.term` 的 peer，避免直接提交旧 term 日志。
 2. 从小到大扫描 matched index 集合。
 3. 若某个 index 被 quorum 覆盖，则把它作为新的 committed candidate。
-4. 若 candidate 大于当前 `leader.committed`，更新 committed。
+4. 若 candidate 大于当前 `Core.committed`，更新 committed。
 
-当前实现的 commit 计算只统计 peer replication state；leader 自身是否应计入 quorum 仍需明确并修正。
+`committed` 是 `Core` 的节点级状态，不属于 `LeaderState`。
 
 ## Write
 
@@ -201,5 +202,4 @@ leader 根据所有 peer 的 `matched` 计算 commit index：
 - fresh node 空日志路径会 panic；`terms.last()`、`read_one(cmds.len() - 1)` 等需要 empty case。
 - `TermArray::fill_gap()` 当前实现会继续 append，而不是填补 `[since, len)`；需要重新定义并修复。
 - `AppendRequest` 没验证 `terms.len() == cmds.len()`，空窗口会导致 `unwrap()` panic。
-- commit 计算没有把 leader 自身计入 quorum。
 - durable storage、snapshot、membership change 都未实现。

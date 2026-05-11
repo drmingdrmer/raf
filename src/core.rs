@@ -8,9 +8,12 @@ use tokio::sync::mpsc::UnboundedReceiver;
 use tokio::sync::mpsc::UnboundedSender;
 use tokio::sync::mpsc::unbounded_channel;
 use tokio::sync::oneshot;
+use tokio::sync::watch;
 
 use crate::Cmd;
+use crate::LogIndex;
 use crate::Membership;
+use crate::Metrics;
 use crate::NodeId;
 use crate::ReplicationState;
 use crate::Storage;
@@ -21,6 +24,9 @@ use crate::event::Event;
 use crate::leader_state::LeaderState;
 use crate::log_id::LogId;
 use crate::network::Network;
+use crate::node_role::NodeRole;
+use crate::raf::Raf;
+use crate::replication_metrics::ReplicationMetrics;
 use crate::request_vote::RequestVote;
 use crate::request_vote_reply::RequestVoteReply;
 use crate::storage_ext::StorageExt;
@@ -47,6 +53,9 @@ where
     /// Static cluster membership.
     membership: Membership,
 
+    /// Greatest log index this node knows to be committed.
+    committed: LogIndex,
+
     /// Election / leadership state. `None` on followers; `Some`
     /// while a candidate or established leader. See
     /// [`LeaderState`] and `DESIGN.md` §8.4.
@@ -57,6 +66,9 @@ where
 
     /// Receiver side of the Core mailbox.
     mailbox: UnboundedReceiver<Event>,
+
+    /// Sender side of the public metrics watch channel.
+    metrics_tx: watch::Sender<Metrics>,
 }
 
 impl<S, N> Core<S, N>
@@ -64,30 +76,37 @@ where
     S: Storage,
     N: Network,
 {
-    /// Spawn the Core onto the current Tokio runtime; return a sender
-    /// to its mailbox.
-    pub(crate) fn spawn(id: NodeId, membership: Membership, storage: S, network: Arc<N>) -> UnboundedSender<Event> {
+    /// Spawn the Core onto the current Tokio runtime and return its public handle.
+    pub(crate) fn spawn(id: NodeId, membership: Membership, storage: S, network: Arc<N>) -> Raf {
         let (tx, rx) = unbounded_channel();
+        let initial_metrics = Metrics::initial(id, membership.node_ids().to_vec());
+        let (metrics_tx, metrics_rx) = watch::channel(initial_metrics);
+
         let core = Self {
             storage,
             network,
             id,
             membership,
+            committed: 0,
             leader: None,
             mailbox_tx: tx.clone(),
             mailbox: rx,
+            metrics_tx,
         };
         tokio::spawn(core.run());
-        tx
+        Raf::from_core(tx, metrics_rx)
     }
 
     /// Single-mailbox event loop. All inbound traffic — application
     /// commands, network requests, network responses — arrives here as
     /// an [`Event`] and is dispatched inline.
     async fn run(mut self) -> Result<(), io::Error> {
+        self.publish_metrics().await;
+
         while let Some(event) = self.mailbox.recv().await {
             self.handle_event(event).await?;
             self.try_initialize_replication().await;
+            self.publish_metrics().await;
         }
 
         Ok(())
@@ -145,7 +164,6 @@ where
             granted_votes: std::iter::once(self.id).collect(), // grant self vote
             established: false,
             replications,
-            committed: 0,
             pending_writes: Default::default(),
         });
 
@@ -454,7 +472,7 @@ where
         }
     }
 
-    /// Advance the leader commit index if a quorum has matched a newer index.
+    /// Advance the node commit index if a quorum has matched a newer index.
     async fn try_update_committed(&mut self) {
         let Some(leader) = self.leader.as_mut() else {
             return;
@@ -479,8 +497,8 @@ where
             match_indices.remove(0);
         }
 
-        if committed > leader.committed {
-            leader.committed = committed;
+        if committed > self.committed {
+            self.committed = committed;
 
             self.respond_write_replies(committed).await;
         }
@@ -559,6 +577,56 @@ where
         let last_term = self.storage.read_one_term(index).await;
         LogId::new(last_term, index)
     }
+
+    /// Publish a metrics snapshot if it differs from the last one.
+    async fn publish_metrics(&self) {
+        let metrics = self.metrics_snapshot().await;
+
+        self.metrics_tx.send_if_modified(|current| {
+            if current == &metrics {
+                false
+            } else {
+                *current = metrics;
+                true
+            }
+        });
+    }
+
+    /// Build the current metrics snapshot from Core-owned state.
+    async fn metrics_snapshot(&self) -> Metrics {
+        let (role, active_term, mut granted_votes, replications) = match self.leader.as_ref() {
+            Some(leader) => {
+                let role = if leader.established {
+                    NodeRole::Leader
+                } else {
+                    NodeRole::Candidate
+                };
+                let granted_votes = leader.granted_votes.iter().copied().collect::<Vec<_>>();
+                let replications = leader
+                    .replications
+                    .iter()
+                    .map(|(target, replication)| (*target, ReplicationMetrics::from_replication_state(replication)))
+                    .collect::<BTreeMap<_, _>>();
+
+                (role, Some(leader.term), granted_votes, replications)
+            }
+            None => (NodeRole::Follower, None, Vec::new(), BTreeMap::new()),
+        };
+
+        granted_votes.sort_unstable();
+
+        Metrics {
+            id: self.id,
+            membership: self.membership.node_ids().to_vec(),
+            role,
+            active_term,
+            committed: self.committed,
+            next_term_slot: self.storage.terms_len().await,
+            next_log_slot: self.storage.cmds_len().await,
+            granted_votes,
+            replications,
+        }
+    }
 }
 
 #[cfg(test)]
@@ -589,15 +657,18 @@ mod tests {
 
     fn new_core(terms: Vec<Term>, cmds_len: usize, membership: Membership) -> Core<MemStorage, NoopNetwork> {
         let (mailbox_tx, mailbox) = unbounded_channel();
+        let (metrics_tx, _) = watch::channel(Metrics::initial(1, membership.node_ids().to_vec()));
 
         Core {
             storage: MemStorage::from_arrays(TermArray::new(terms), CmdArray::new(vec![Cmd::empty(); cmds_len])),
             network: Arc::new(NoopNetwork),
             id: 1,
             membership,
+            committed: 0,
             leader: None,
             mailbox_tx,
             mailbox,
+            metrics_tx,
         }
     }
 
@@ -641,7 +712,6 @@ mod tests {
             granted_votes: [1, 2, 3].into(),
             established: true,
             replications: Default::default(),
-            committed: 0,
             pending_writes: Default::default(),
         });
 
@@ -673,6 +743,14 @@ mod tests {
 
         core.try_update_committed().await;
 
-        assert_eq!(core.leader.as_ref().unwrap().committed, 12);
+        assert_eq!(core.committed, 12);
+
+        let metrics = core.metrics_snapshot().await;
+        assert_eq!(metrics.role, NodeRole::Leader);
+        assert_eq!(metrics.active_term, Some(10));
+        assert_eq!(metrics.committed, 12);
+        assert_eq!(metrics.granted_votes, vec![1, 2, 3]);
+        assert_eq!(metrics.replications.len(), 4);
+        assert_eq!(metrics.replications[&1].matched, 12);
     }
 }

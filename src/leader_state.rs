@@ -45,9 +45,6 @@ pub(crate) struct LeaderState {
     /// Replication state for every node, including the leader itself.
     pub replications: BTreeMap<NodeId, ReplicationState>,
 
-    /// Greatest log index committed by this leader.
-    pub committed: u64,
-
     /// Client write replies waiting for their log index to commit.
     pub pending_writes: VecDeque<(LogIndex, oneshot::Sender<Result<WriteReply, io::Error>>)>,
 }
