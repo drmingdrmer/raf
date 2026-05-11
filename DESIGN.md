@@ -87,6 +87,7 @@ leader 发给 peer，用于探测匹配点并复制日志窗口。
 | 字段 | 含义 |
 |---|---|
 | `term` | leader term。 |
+| `commit_index` | leader 已知 committed 的最大 index；follower 可用它推进本地 commit。 |
 | `assume_matched_at` | 本次窗口起始 index。 |
 | `terms` | 从 `assume_matched_at` 开始的 term window。 |
 | `cmds` | 与 `terms` 对应的 command window。 |
@@ -159,7 +160,7 @@ leader 对每个 peer 保存：
 
 1. 计算 `start = (matched + end) / 2`。
 2. 读取固定窗口，当前长度为 64。
-3. 发送 `Append { term, assume_matched_at: start, terms, cmds }`。
+3. 发送 `Append { term, commit_index, assume_matched_at: start, terms, cmds }`。
 
 这个 RPC 同时用于二分探测匹配点和复制缺失日志。
 
@@ -177,6 +178,7 @@ leader 对每个 peer 保存：
    - 如果本地 command tail 与 leader 分歧，截断到 `last_matched + 1`。
    - 覆盖本地 `terms` window。
    - 只追加本地缺失的 command suffix，避免重复追加已存在 command。
+   - 如果 `commit_index < appended_last_index`，推进本地 `committed` 到 `commit_index`。
    - 返回最后匹配的 `LogId`。
 
 ### 处理 AppendReply
@@ -200,6 +202,10 @@ leader 根据所有 replication state 的 `matched` 计算节点级 commit index
 
 `committed` 是 `Core` 的节点级状态，不属于 `LeaderState`。
 
+leader 会把自己的 committed index 放进 `AppendRequest.commit_index`。follower 只在该
+index 严格小于本次成功 Append 的最后 index 时接受它，避免提交还没有被当前 leader
+Append 覆盖确认的日志。
+
 ## Write
 
 `Raf::write()` 把 application write 发送到 Core。
@@ -214,5 +220,4 @@ leader 根据所有 replication state 的 `matched` 计算节点级 commit index
 
 - fresh node 空日志路径会 panic；`terms.last()`、`read_one(cmds.len() - 1)` 等需要 empty case。
 - `TermArray::fill_gap()` 当前实现会继续 append，而不是填补 `[since, len)`；需要重新定义并修复。
-- `AppendRequest` 没验证 `terms.len() == cmds.len()`，空窗口会导致 `unwrap()` panic。
 - durable storage、snapshot、membership change 都未实现。

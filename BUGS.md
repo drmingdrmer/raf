@@ -14,12 +14,14 @@
 
 - P1：replication 的 `end` 在成功匹配后不更新。当前修复在收到 matched reply 后把 `end` 至少推进到 `matched.index + 1`，避免 `matched >= end` 后下一轮 probe 退回旧窗口。
 
+- P2：follower 的 committed index 不会随 `Append` 推进。当前修复在 `AppendRequest` 中携带 leader 的 `commit_index`；follower 只在 `commit_index < appended_last_index` 时推进本地 `committed`。
+
 ## 跳过
 
 - P1：candidate 收到任意 rejected vote 就直接 step down。当前实现有意保持严格行为；任意拒票都会让 candidate 退回 follower。
 
+- P2：`StorageExt` 对自定义空 storage 不安全。当前按要求暂不修复。
+
 ## 待修复
 
-- P2：follower 的 committed index 不会随 `Append` 推进。`AppendRequest` 还没有携带 leader commit index，因此 follower metrics 中的 `committed` 可能长期停在 0。
-
-- P2：`StorageExt` 对自定义空 storage 不安全。`last_term()` 在 `terms_len() == 0` 时会下溢，`read_one_term()` 会直接索引空结果。
+当前没有待修复的 review bug。

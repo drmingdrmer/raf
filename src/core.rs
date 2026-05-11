@@ -388,6 +388,7 @@ where
         }
 
         let sending_term = leader.term;
+        let commit_index = self.committed;
 
         for replication in leader.replications.values_mut() {
             if replication.target == self.id {
@@ -414,6 +415,7 @@ where
 
             let append_request = AppendRequest {
                 term: leader.term,
+                commit_index,
                 assume_matched_at: start,
                 terms,
                 cmds,
@@ -528,19 +530,27 @@ where
             self.storage.append_cmds(append.cmds[append_from..].to_vec()).await;
         }
 
+        let appended_last_index = append.assume_matched_at + append.terms.len() as u64 - 1;
+        if append.commit_index > self.committed && append.commit_index < appended_last_index {
+            log::info!(
+                "advanced follower commit node={} from={} to={} appended_last_index={appended_last_index}",
+                self.id,
+                self.committed,
+                append.commit_index
+            );
+            self.committed = append.commit_index;
+        }
+
         log::debug!(
             "accepted Append node={} term={} matched_index={}",
             self.id,
             append.term,
-            append.assume_matched_at + append.terms.len() as u64 - 1
+            appended_last_index
         );
 
         Ok(AppendReply {
             term: last_term,
-            matched: Some(LogId::new(
-                *append.terms.last().unwrap(),
-                append.assume_matched_at + append.terms.len() as u64 - 1,
-            )),
+            matched: Some(LogId::new(*append.terms.last().unwrap(), appended_last_index)),
             conflict: None,
         })
     }
@@ -818,6 +828,7 @@ mod tests {
 
         let append = AppendRequest {
             term: 1,
+            commit_index: 0,
             assume_matched_at: 1,
             terms: vec![1, 1, 1],
             cmds: vec![Cmd::empty(); 3],
@@ -831,6 +842,7 @@ mod tests {
 
         let append = AppendRequest {
             term: 1,
+            commit_index: 0,
             assume_matched_at: 1,
             terms: vec![1, 1, 1],
             cmds: vec![Cmd::empty(); 3],
@@ -975,6 +987,7 @@ mod tests {
 
         let append = AppendRequest {
             term: 1,
+            commit_index: 0,
             assume_matched_at: 0,
             terms: vec![0, 1],
             cmds: vec![Cmd::empty(), Cmd::empty()],
@@ -988,11 +1001,48 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn handle_append_advances_follower_commit_below_appended_last_index() {
+        let mut core = new_core(vec![0, 1], 2, Membership::new(vec![1, 2, 3]));
+
+        let append = AppendRequest {
+            term: 1,
+            commit_index: 2,
+            assume_matched_at: 1,
+            terms: vec![1, 1, 1],
+            cmds: vec![Cmd::empty(); 3],
+        };
+
+        let reply = core.handle_append(append).await.unwrap();
+
+        assert_eq!(reply.matched.unwrap(), LogId::new(1, 3));
+        assert_eq!(core.committed, 2);
+    }
+
+    #[tokio::test]
+    async fn handle_append_does_not_commit_appended_last_index() {
+        let mut core = new_core(vec![0, 1], 2, Membership::new(vec![1, 2, 3]));
+
+        let append = AppendRequest {
+            term: 1,
+            commit_index: 3,
+            assume_matched_at: 1,
+            terms: vec![1, 1, 1],
+            cmds: vec![Cmd::empty(); 3],
+        };
+
+        let reply = core.handle_append(append).await.unwrap();
+
+        assert_eq!(reply.matched.unwrap(), LogId::new(1, 3));
+        assert_eq!(core.committed, 0);
+    }
+
+    #[tokio::test]
     async fn handle_append_returns_empty_reply_for_empty_window() {
         let mut core = new_core(vec![0, 1], 2, Membership::new(vec![1, 2, 3]));
 
         let append = AppendRequest {
             term: 1,
+            commit_index: 0,
             assume_matched_at: 2,
             terms: vec![],
             cmds: vec![],
@@ -1014,6 +1064,7 @@ mod tests {
 
         let append = AppendRequest {
             term: 1,
+            commit_index: 0,
             assume_matched_at: 1,
             terms: vec![1],
             cmds: vec![],

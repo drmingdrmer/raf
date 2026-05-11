@@ -7,6 +7,9 @@ pub struct AppendRequest {
     /// Leader term carried by this request.
     pub term: Term,
 
+    /// Greatest log index the leader knows to be committed.
+    pub commit_index: LogIndex,
+
     /// First log index included in `terms` and `cmds`.
     pub assume_matched_at: LogIndex,
 
