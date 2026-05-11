@@ -155,7 +155,6 @@ let last_log_id = (terms[last_log_index], last_log_index);
 下面这个例子中，当前完整日志只到 index `3`，所以 `last_log_id = (2, 3)`。候选人发起新 election 时，取 `terms.len() = 4` 作为新的 term，并先把 index `4` 写入 `terms`。此时 `cmds` 仍然只到 index `3`，因为这个 candidate 还没有成为 established leader。
 
 ```diagram
-
 Leader election:
                  .-- last log id = (2,3)
                  |  new term = 4
@@ -203,6 +202,50 @@ let can_vote =
         && req.last_log_id >= local_last_log_id;
 ```
 
+下面的图把同一个 `RequestVote { term: 5, last_log_id: (2, 3) }` 发给三种不同本地状态的 voter。候选人自己的状态在最上面；下面三条分支分别展示 voter 会如何判断。
+
+```diagram
+RequestVote:
+                 .-- last log id = (2,3)
+                 |     new term = 5
+                 |     |
+                 v     v
+terms:  0  1  2  2  4 [5]
+cmds :  ø  ø  ø  c3
+-------------------------------------> Node 1
+index:  0  1  2  3  4  5  6  7  8  9
+    |   |   |
+    |   |   |
+    |   |   | granted
+    |   |   v
+    |   |   terms:  0  1  2  2     *
+    |   |   cmds :  ø  ø  ø  *
+    |   |   -------------------------------------> Node 2
+    |   |   index:  0  1  2  3  4  5  6  7  8  9
+    |   |
+    |   |
+    |   | rejected: term=7
+    |   v
+    |   terms:  0  1  2  2  4  5  6  7*
+    |   cmds :  ø  ø  ø  c3
+    |   -------------------------------------> Node 3
+    |   index:  0  1  2  3  4  5  6  7  8  9
+    |
+    |
+    | rejected: last log id = (4,4)
+    v
+    terms:  0  1  2  2  4
+    cmds :  ø  ø  ø  c3 ø
+    -------------------------------------> Node 4
+    index:  0  1  2  3  4  5  6  7  8  9
+```
+
+三种结果分别是：
+
+- `granted`：voter 的 `terms` 只到 index `3`，`cmds` 也只到 index `3`。因此 `req.term = 5` 是一个尚未出现过的新 term index，并且 `req.last_log_id = (2, 3)` 不落后于 voter，本次投票可以授予。
+- `rejected: term=7`：voter 已经观察到更靠后的 term index `7`。因为 `req.term = 4 < terms.len()`，candidate 请求的 term 在 voter 本地已经过期，所以拒绝。
+- `rejected: last log id = (4,4)`：voter 的最后一条完整日志是 `(4, 4)`，比 candidate 的 `(2, 3)` 更新。即使 candidate 请求的 term 可以写入，日志 freshness 也不满足，所以拒绝。
+
 如果请求合法，voter 会把这个 term 记录进本地 `terms`。如果本地 `terms` 比 `req.term` 短，就用默认 index 补齐，直到本地已经包含 index `req.term`：
 
 ```rust
@@ -217,8 +260,6 @@ if can_vote {
 这些默认项的值等于自己的 index，用来保持 `i >= terms[i]`。它们表示本地已经观察到对应 term index，并不表示这些 index 都已经有完整日志项，因为对应的 `cmds` 可能还不存在。循环最后一次写入时，`index == req.term`，因此这个 voter 已经观察并接受了该 term；后续它不会再接受旧 term 或已经存在于本地 `terms` 中的 term。
 
 这部分替代了标准 Raft 中持久化 `currentTerm` 的角色，但它不完全等价于标准 Raft 的 `votedFor`。当前实现没有持久化“这个 term 投给了谁”，因此 RequestVote 重试和节点重启后的行为会更保守；后面的“当前边界”会单独说明这个取舍。
-
-![Three node election flow](assets/election-flow.svg)
 
 _候选人选择 `terms.len()` 作为 term；其它节点在本地 `terms` 中记录这个 term 并授予投票。_
 
@@ -250,9 +291,20 @@ struct ReplicationState {
 
 leader 自己也会有一份 replication state。这样计算 commit 时可以统一处理：只需要看哪些节点的 `matched` 覆盖了某个 index，并判断这些节点是否组成 quorum。
 
-![Leader state](assets/leader-state.svg)
-
 _Established leader 保存本次 leadership 的 term、已授予节点集合，以及每个节点的 replication progress。_
+
+建立 leader 之后，本地 `terms` 中已经存在但 `cmds` 还缺失的位置都会被补成 empty command。这样做之后，leader 本地的每个已知 term index 都有对应 command，后续新的业务写入就可以从下一个 index 开始。
+
+```diagram
+Establish leader:
+
+terms:  0  1  2  2  4 [5]
+cmds :  ø  ø  ø  c3 ø  ø
+-------------------------------------> Node 1
+index:  0  1  2  3  4  5  6  7  8  9
+```
+
+在这个例子里，term `4` 是之前失败 election 留下的 term index；term `5` 是当前 leader 当选时占用的 index。当 term `5` 的 candidate 成为 established leader 后，index `4` 和 index `5` 都会被补上 `ø`。其中 index `5` 上的 `ø` 就是这个 leader 的第一条日志。
 
 ## 写入日志
 
