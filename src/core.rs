@@ -588,6 +588,7 @@ where
                 matched.index
             );
             replication.matched = matched.index;
+            replication.end = replication.end.max(matched.index + 1);
 
             self.try_update_committed().await;
         }
@@ -891,6 +892,38 @@ mod tests {
         assert_eq!(metrics.granted_votes, vec![1, 2, 3]);
         assert_eq!(metrics.replications.len(), 4);
         assert_eq!(metrics.replications[&1].matched, 12);
+    }
+
+    #[tokio::test]
+    async fn handle_append_reply_advances_end_after_match() {
+        let mut core = new_core(vec![0, 1, 1, 1, 1, 1], 6, Membership::new(vec![1, 2, 3]));
+
+        core.leader = Some(LeaderState {
+            term: 1,
+            granted_votes: [1, 2].into(),
+            established: true,
+            replications: Default::default(),
+            pending_writes: Default::default(),
+        });
+
+        let leader = core.leader.as_mut().unwrap();
+        leader.replications.insert(2, ReplicationState {
+            target: 2,
+            matched: 1,
+            end: 3,
+            inflight: Arc::new(tokio::sync::Semaphore::new(1)),
+        });
+
+        core.handle_append_reply(1, 2, AppendReply {
+            term: 1,
+            matched: Some(LogId::new(1, 5)),
+            conflict: None,
+        })
+        .await;
+
+        let replication = &core.leader.as_ref().unwrap().replications[&2];
+        assert_eq!(replication.matched, 5);
+        assert_eq!(replication.end, 6);
     }
 
     #[tokio::test]

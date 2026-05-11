@@ -150,7 +150,7 @@ leader 发给 peer，用于探测匹配点并复制日志窗口。
 leader 对每个 peer 保存：
 
 - `matched`：已知 peer 与 leader 匹配的最大 index。
-- `end`：当前探测上界。
+- `end`：当前探测上界；`end` 指向一个 follower 没有 confirmed match 的 index。
 - `inflight`：保证同一个 peer 同时最多一个 Append RPC。
 
 ### 发送 Append
@@ -185,7 +185,7 @@ leader 收到 `AppendReply`：
 
 - 如果 `reply.term > leader.term`，清空 `leader`，退回 follower。
 - 如果 `reply.conflict = Some(index)`，设置该 peer 的 `end = index`。
-- 如果 `reply.matched = Some(log_id)`，设置该 peer 的 `matched = log_id.index`，然后尝试推进 commit。
+- 如果 `reply.matched = Some(log_id)`，设置该 peer 的 `matched = log_id.index`，并把 `end` 至少推进到 `matched + 1`，然后尝试推进 commit。
 
 每个事件处理结束后，Core 会再次调用 `try_initialize_replication()`，因此冲突或匹配回复都会驱动下一轮复制。
 
