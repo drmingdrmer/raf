@@ -60,15 +60,15 @@ struct RafStorage {
 - `cmds[i]` 是 index `i` 这条日志的应用命令。
 - `log_id(i)` 仍然是 `(terms[i], i)`。
 
-下面是一段可能出现的存储状态。`_` 表示 empty command；`cmds` 只到 index `7`，所以 index `8` 和 `9` 还不是完整日志项。
+下面是一段可能出现的存储状态。`ø` 表示 empty command；`cmds` 只到 index `7`，所以 index `8` 和 `9` 还不是完整日志项。
 
 ```text
 Storage layout:
 
-terms vector:  0  1  2  2  4  5  6  6  8  9
-cmds  vector:  _  _  _  C3 _  _  _  C7
+terms:  0  1  2  2  4  5  6  6  8  9
+cmds :  ø  ø  ø  C3 ø  ø  ø  C7
 ----------------------------------------------> index
-               0  1  2  3  4  5  6  7  8  9
+        0  1  2  3  4  5  6  7  8  9
 ```
 
 逐个 index 看，这段状态表示：
@@ -150,35 +150,39 @@ let last_log_index = cmds.len() - 1;
 let last_log_id = (terms[last_log_index], last_log_index);
 ```
 
-这里和标准 Raft 的含义一致：voter 用它判断候选人的日志是否至少和自己一样新。
+这里和标准 Raft 的含义一致：voter 用它判断候选人的日志是否至少和自己一样新。注意，新的 election term 来自 `terms.len()`，而 `last_log_id` 来自 `cmds.len() - 1`；因此它们可以指向不同的 index。
+
+下面这个例子中，当前完整日志只到 index `3`，所以 `last_log_id = (2, 3)`。候选人发起新 election 时，取 `terms.len() = 4` 作为新的 term，并先把 index `4` 写入 `terms`。此时 `cmds` 仍然只到 index `3`，因为这个 candidate 还没有成为 established leader。
 
 ```diagram
 
 Leader election:
-                       .-- last log id = (2,3)
-                       |  new term = 4
-                       |  |
-                       v  v
-terms array:  0  1  2  2 [4]
-cmds  array:  ø  ø  ø  c3
-----------------------------------------------> index
-              0  1  2  3  4  5  6  7  8  9
+                 .-- last log id = (2,3)
+                 |  new term = 4
+                 |  |
+                 v  v
+terms:  0  1  2  2 [4]
+cmds :  ø  ø  ø  c3
+----------------------------------------> index
+        0  1  2  3  4  5  6  7  8  9
 ```
 
-这是如果 term 等于 4 的 leader 选举失败了，那么下一次选举的话，可能就在 term 等于 5 继续执行。
+如果 term `4` 的 election 没有形成 quorum，它只会在 `terms` 中留下一个已经观察到的 term index，不会产生新的 command。下一次 election 会继续使用 `terms.len()`，也就是 term `5`。
 
 ```diagram
 
 Leader election:
-                       .-- last log id = (2,3)
-                       |     new term = 5
-                       |     |
-                       v     v
-terms array:  0  1  2  2  4 [5]
-cmds  array:  ø  ø  ø  c3
-----------------------------------------------> index
-              0  1  2  3  4  5  6  7  8  9
+                 .-- last log id = (2,3)
+                 |     new term = 5
+                 |     |
+                 v     v
+terms:  0  1  2  2  4 [5]
+cmds :  ø  ø  ø  c3
+----------------------------------------> index
+        0  1  2  3  4  5  6  7  8  9
 ```
+
+这时 `last_log_id` 仍然是 `(2, 3)`，因为 `cmds` 仍然没有超过 index `3`；变化的是新的 candidate term 从 `4` 前进到 `5`。只有当某次 election 成功并建立 leader 后，系统才会用 empty command 把 `cmds` 补到对应的 term index。
 
 
 ## 处理投票请求
