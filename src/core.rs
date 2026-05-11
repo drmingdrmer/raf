@@ -682,12 +682,7 @@ where
         self.dispatch_leader_write(req, reply_tx).await;
     }
 
-    /// Leader-side write handling — placeholder.
-    ///
-    /// TODO: implement leader-side write replication.
-    /// Will (1) append the request locally at `log.len`, (2)
-    /// replicate the new entry to peers, (3) advance the committed
-    /// index once a quorum has acked, and (4) reply with that index.
+    /// Append a leader-side write and reply once it reaches quorum commit.
     async fn dispatch_leader_write(
         &mut self,
         req: WriteRequest,

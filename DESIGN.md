@@ -16,7 +16,7 @@
 - snapshot / log compaction。
 - membership change。
 - payload 持久化语义。
-- 完整的 leader-side write replication；`write()` 入口目前仍返回未实现错误。
+- 定时 election 和 heartbeat；当前由应用显式触发 election，复制由事件循环继续驱动。
 
 ## 状态
 
@@ -213,11 +213,9 @@ Append 覆盖确认的日志。
 当前规则：
 
 - 非 established leader 返回 `not a leader`。
-- established leader 进入 `dispatch_leader_write()`。
-- `dispatch_leader_write()` 尚未实现真实复制，目前返回 `leader-side write replication not yet implemented`。
+- established leader 在本地追加一个新 log slot，写入当前 `leader.term`。
+- leader 更新自身 replication progress，并把 application reply 放入 `pending_writes`。
+- 后续 `try_initialize_replication()` 把新 slot 复制给 peers。
+- `try_update_committed()` 观察到 quorum matched 后推进 `Core.committed`，再回复对应的 pending write。
 
-## 当前已知问题
-
-- fresh node 空日志路径会 panic；`terms.last()`、`read_one(cmds.len() - 1)` 等需要 empty case。
-- `TermArray::fill_gap()` 当前实现会继续 append，而不是填补 `[since, len)`；需要重新定义并修复。
-- durable storage、snapshot、membership change 都未实现。
+当前 `Cmd` 仍是占位 command，`WriteRequest` 的 application payload 持久化语义不在本文范围内。
