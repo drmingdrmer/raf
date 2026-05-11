@@ -1,28 +1,6 @@
-:root {
-  --bg: #f8fafc;
-  --surface: #ffffff;
-  --surface-muted: #eef2f7;
-  --ink: #172033;
-  --muted: #667085;
-  --line: #cbd5e1;
-  --leader: #2563eb;
-  --leader-soft: #dbeafe;
-  --follower: #0f766e;
-  --candidate: #7c3aed;
-  --term: #f59e0b;
-  --term-soft: #fef3c7;
-  --cmd: #10b981;
-  --cmd-soft: #d1fae5;
-  --match: #16a34a;
-  --match-soft: #dcfce7;
-  --conflict: #dc2626;
-  --conflict-soft: #fee2e2;
-  --shadow: rgba(15, 23, 42, 0.12);
-}
-
 svg {
-  background: var(--bg);
-  color: var(--ink);
+  background: #f8fafc;
+  color: #172033;
   font-family:
     Inter,
     ui-sans-serif,
@@ -34,48 +12,58 @@ svg {
 }
 
 .canvas {
-  fill: var(--bg);
+  fill: #f8fafc;
 }
 
 .panel {
-  fill: var(--surface);
-  stroke: var(--line);
+  fill: #ffffff;
+  stroke: #cbd5e1;
   stroke-width: 1.5;
-  filter: drop-shadow(0 10px 20px var(--shadow));
 }
 
 .panel-muted {
-  fill: var(--surface-muted);
-  stroke: var(--line);
+  fill: #eef2f7;
+  stroke: #cbd5e1;
   stroke-width: 1.25;
 }
 
+.lane {
+  stroke: #cbd5e1;
+  stroke-width: 2;
+}
+
 .title {
-  fill: var(--ink);
+  fill: #172033;
   font-size: 28px;
   font-weight: 700;
 }
 
 .subtitle {
-  fill: var(--muted);
+  fill: #667085;
   font-size: 16px;
   font-weight: 500;
 }
 
 .label {
-  fill: var(--ink);
+  fill: #172033;
   font-size: 14px;
   font-weight: 650;
 }
 
 .small {
-  fill: var(--muted);
+  fill: #667085;
   font-size: 12px;
   font-weight: 500;
 }
 
+.tiny {
+  fill: #667085;
+  font-size: 10px;
+  font-weight: 500;
+}
+
 .code {
-  fill: var(--ink);
+  fill: #172033;
   font-family:
     "SFMono-Regular",
     Consolas,
@@ -86,82 +74,111 @@ svg {
 }
 
 .node {
-  fill: var(--surface);
-  stroke: var(--line);
+  fill: #ffffff;
+  stroke: #cbd5e1;
   stroke-width: 1.5;
 }
 
 .node-leader {
-  stroke: var(--leader);
+  stroke: #2563eb;
   stroke-width: 2.5;
 }
 
 .node-follower {
-  stroke: var(--follower);
+  stroke: #0f766e;
 }
 
 .node-candidate {
-  stroke: var(--candidate);
+  stroke: #7c3aed;
   stroke-width: 2.5;
 }
 
 .entry {
-  fill: var(--surface);
-  stroke: var(--line);
+  fill: #ffffff;
+  stroke: #cbd5e1;
   stroke-width: 1.25;
 }
 
 .entry-term {
-  fill: var(--term-soft);
-  stroke: var(--term);
+  fill: #fef3c7;
+  stroke: #f59e0b;
+  stroke-width: 1.25;
 }
 
 .entry-cmd {
-  fill: var(--cmd-soft);
-  stroke: var(--cmd);
+  fill: #d1fae5;
+  stroke: #10b981;
+  stroke-width: 1.25;
 }
 
 .entry-match {
-  fill: var(--match-soft);
-  stroke: var(--match);
+  fill: #dcfce7;
+  stroke: #16a34a;
+  stroke-width: 1.25;
 }
 
 .entry-conflict {
-  fill: var(--conflict-soft);
-  stroke: var(--conflict);
+  fill: #fee2e2;
+  stroke: #dc2626;
+  stroke-width: 1.25;
+}
+
+.entry-muted {
+  fill: #eef2f7;
+  stroke: #cbd5e1;
+  stroke-dasharray: 5 4;
+  stroke-width: 1.25;
 }
 
 .arrow {
   fill: none;
-  stroke: var(--muted);
+  stroke: #667085;
   stroke-width: 2;
   marker-end: url("#arrowhead");
 }
 
+.arrow-muted {
+  fill: none;
+  stroke: #cbd5e1;
+  stroke-width: 1.5;
+  marker-end: url("#arrowhead");
+}
+
 .arrow-strong {
-  stroke: var(--leader);
+  fill: none;
+  stroke: #2563eb;
   stroke-width: 2.5;
+  marker-end: url("#arrowhead");
+}
+
+.arrow-conflict {
+  fill: none;
+  stroke: #dc2626;
+  stroke-width: 2.5;
+  marker-end: url("#arrowhead");
 }
 
 .quorum {
-  fill: var(--leader-soft);
-  stroke: var(--leader);
+  fill: #dbeafe;
+  stroke: #2563eb;
   stroke-dasharray: 6 4;
   stroke-width: 1.5;
 }
 
 .badge {
-  fill: var(--surface-muted);
-  stroke: var(--line);
+  fill: #eef2f7;
+  stroke: #cbd5e1;
   stroke-width: 1;
 }
 
 .badge-term {
-  fill: var(--term-soft);
-  stroke: var(--term);
+  fill: #fef3c7;
+  stroke: #f59e0b;
+  stroke-width: 1;
 }
 
 .badge-leader {
-  fill: var(--leader-soft);
-  stroke: var(--leader);
+  fill: #dbeafe;
+  stroke: #2563eb;
+  stroke-width: 1;
 }

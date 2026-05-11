@@ -62,14 +62,9 @@ struct RafStorage {
 
 下面是一段可能出现的存储状态。`ø` 表示 empty command；`cmds` 只到 index `7`，所以 index `8` 和 `9` 还不是完整日志项。
 
-```text
-Storage layout:
+<!-- [ASCII source](assets/storage-layout.txt) -->
 
-terms:  0  1  2  2  4  5  6  6  8  9
-cmds :  ø  ø  ø  C3 ø  ø  ø  C7
-------------------------------------->
-index:  0  1  2  3  4  5  6  7  8  9
-```
+![Storage layout](assets/storage-layout.svg)
 
 逐个 index 看，这段状态表示：
 
@@ -154,32 +149,15 @@ let last_log_id = (terms[last_log_index], last_log_index);
 
 下面这个例子中，当前完整日志只到 index `3`，所以 `last_log_id = (2, 3)`。候选人发起新 election 时，取 `terms.len() = 4` 作为新的 term，并先把 index `4` 写入 `terms`。此时 `cmds` 仍然只到 index `3`，因为这个 candidate 还没有成为 established leader。
 
-```diagram
-Leader election:
-                 .-- last log id = (2,3)
-                 |  new term = 4
-                 |  |
-                 v  v
-terms:  0  1  2  2 [4]
-cmds :  ø  ø  ø  c3
-------------------------------------->
-index:  0  1  2  3  4  5  6  7  8  9
-```
+<!-- [ASCII source](assets/leader-election-term4.txt) -->
+
+![Leader election term=4](assets/leader-election-term4.svg)
 
 如果 term `4` 的 election 没有形成 quorum，它只会在 `terms` 中留下一个已经观察到的 term index，不会产生新的 command。下一次 election 会继续使用 `terms.len()`，也就是 term `5`。
 
-```diagram
+<!-- [ASCII source](assets/leader-election-term5.txt) -->
 
-Leader election:
-                 .-- last log id = (2,3)
-                 |     new term = 5
-                 |     |
-                 v     v
-terms:  0  1  2  2  4 [5]
-cmds :  ø  ø  ø  c3
-------------------------------------->
-index:  0  1  2  3  4  5  6  7  8  9
-```
+![Leader election retry term=5](assets/leader-election-term5.svg)
 
 这时 `last_log_id` 仍然是 `(2, 3)`，因为 `cmds` 仍然没有超过 index `3`；变化的是新的 candidate term 从 `4` 前进到 `5`。只有当某次 election 成功并建立 leader 后，系统才会用 empty command 把 `cmds` 补到对应的 term index。
 
@@ -204,41 +182,9 @@ let can_vote =
 
 下面的图把同一个 `RequestVote { term: 5, last_log_id: (2, 3) }` 发给三种不同本地状态的 voter。候选人自己的状态在最上面；下面三条分支分别展示 voter 会如何判断。
 
-```diagram
-RequestVote:
-                 .-- last log id = (2,3)
-                 |     new term = 5
-                 |     |
-                 v     v
-terms:  0  1  2  2  4 [5]
-cmds :  ø  ø  ø  c3
--------------------------------------> Node 1
-index:  0  1  2  3  4  5  6  7  8  9
-    |   |   |
-    |   |   |
-    |   |   | granted
-    |   |   v
-    |   |   terms:  0  1  2  2     *
-    |   |   cmds :  ø  ø  ø  *
-    |   |   -------------------------------------> Node 2
-    |   |   index:  0  1  2  3  4  5  6  7  8  9
-    |   |
-    |   |
-    |   | rejected: term=7
-    |   v
-    |   terms:  0  1  2  2  4  5  6  7*
-    |   cmds :  ø  ø  ø  c3
-    |   -------------------------------------> Node 3
-    |   index:  0  1  2  3  4  5  6  7  8  9
-    |
-    |
-    | rejected: last log id = (4,4)
-    v
-    terms:  0  1  2  2  4
-    cmds :  ø  ø  ø  c3 ø
-    -------------------------------------> Node 4
-    index:  0  1  2  3  4  5  6  7  8  9
-```
+<!-- [ASCII source](assets/request-vote.txt) -->
+
+![RequestVote scenarios](assets/request-vote.svg)
 
 三种结果分别是：
 
@@ -295,14 +241,9 @@ _Established leader 保存本次 leadership 的 term、已授予节点集合，�
 
 建立 leader 之后，本地 `terms` 中已经存在但 `cmds` 还缺失的位置都会被补成 empty command。这样做之后，leader 本地的每个已知 term index 都有对应 command，后续新的业务写入就可以从下一个 index 开始。
 
-```diagram
-Establish leader:
+<!-- [ASCII source](assets/establish-leader.txt) -->
 
-terms:  0  1  2  2  4 [5]
-cmds :  ø  ø  ø  c3 ø  ø
--------------------------------------> Node 1
-index:  0  1  2  3  4  5  6  7  8  9
-```
+![Establish leader](assets/establish-leader.svg)
 
 在这个例子里，term `4` 是之前失败 election 留下的 term index；term `5` 是当前 leader 当选时占用的 index。当 term `5` 的 candidate 成为 established leader 后，index `4` 和 index `5` 都会被补上 `ø`。其中 index `5` 上的 `ø` 就是这个 leader 的第一条日志。
 
@@ -336,42 +277,9 @@ struct Append {
 
 下面的图展示同一个 Append 请求面对几种 follower 状态时的结果。这个请求的 `term = 5`，`start = 3`，并携带 index `3..=5` 的连续日志；index `3` 是这次请求的匹配点。
 
-```diagram
+<!-- [ASCII source](assets/append-replication.txt) -->
 
-Append:
-                 .-- start = 3
-                 |   terms = [2,5,5]
-                 |   cmds  = [c3,ø,c5]
-                 v
-leader terms: 0  1  2 [2  4  5]
-leader cmds : ø  ø  ø [c3 ø  c5]
-----------------------------------------> index
-              0  1  2  3  4  5  6  7
-    |   |   |
-    |   |   |
-    |   |   | accepted: append missing suffix and update terms
-    |   |   v
-    |   |   terms: 0  1  2 {2  5  5}
-    |   |   cmds : ø  ø  ø  c3 {ø  c5}
-    |   |   ----------------------------------------> index
-    |   |          0  1  2  3  4  5  6  7
-    |   |
-    |   |
-    |   | conflict at start
-    |   v
-    |   terms: 0  1  2  3*
-    |   cmds : ø  ø  ø  x*
-    |   ----------------------------------------> index
-    |          0  1  2  3  4  5  6  7
-    |
-    |
-    | rejected: follower has newer term
-    v
-    terms: 0  1  2  2  4  5  6*
-    cmds : ø  ø  ø  c3 ø  ø  ø
-    ----------------------------------------> index
-           0  1  2  3  4  5  6  7
-```
+![Append replication scenarios](assets/append-replication.svg)
 
 三种结果分别是：
 
@@ -387,8 +295,6 @@ leader cmds : ø  ø  ø [c3 ø  c5]
 4. 如果本地后续 commands 与 leader 分歧，截断本地 commands。
 5. 覆盖本地 `terms` 中本次请求对应的范围。
 6. 只追加本地缺失的 commands。
-
-![Replication conflict repair](assets/replication-conflict.svg)
 
 _Append 找到共同前缀，截断 follower 的冲突后缀，再复制 leader 缺失的日志。_
 
@@ -412,25 +318,9 @@ if quorum_has_matched(index) && index >= leader.term {
 
 下面这个状态展示了为什么不能只看“是否复制到 quorum”。term `6` 的 leader 已经把 index `4` 和 `5` 的旧日志复制到了 quorum `A+B`，但 quorum 还没有匹配到这个 leader 自己的 term index `6`，所以 index `4` 和 `5` 仍然不能被提交：
 
-```diagram
-Not committed yet:
+<!-- [ASCII source](assets/not-committed.txt) -->
 
-leader term = 6
-
-node A terms: 0  1  2  2 {2} 2  6
-node A cmds : ø  ø  ø  c {x} ø  ø
-
-node B terms: 0  1  2  2 {2} 2  6
-node B cmds : ø  ø  ø  c {x}
-
-node C terms: 0  1  2  2  4  5  5  7  <-- new leader
-node C cmds : ø  ø  ø  c  ø  ø  ø
-----------------------------------------> index
-              0  1  2  3  4  5  6  7
-
-index 4 and 5 are on quorum A+B,
-but quorum has not matched index 6, the leader term index.
-```
+![Not committed yet](assets/not-committed.svg)
 
 如果随后出现 term `7` 的新 leader，并且它的 `last_log_id=(5,6)` 更大，那么它可以用自己覆盖这些未提交日志。这里 `{x}` 标出被新 leader 替换的范围：
 
