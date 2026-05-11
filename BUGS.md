@@ -8,11 +8,13 @@
 
 - P0：单节点集群永远不会成为 leader。当前修复在 election 初始化 self-vote 后立即检查 quorum，单节点可以直接成为 established leader。
 
+- P1：收到合法 `Append` 时没有清空本地 candidate/leader 状态。当前修复在 `append.term >= local_last_term` 时清空本地 leader state，让节点退回 follower。
+
+## 跳过
+
+- P1：candidate 收到任意 rejected vote 就直接 step down。当前实现有意保持严格行为；任意拒票都会让 candidate 退回 follower。
+
 ## 待修复
-
-- P1：candidate 收到任意 rejected vote 就直接 step down。在多节点集群里，一个 follower 拒绝不代表 candidate 不能从其它节点获得 quorum；只有观察到更高 term 或等价的更强 stale 证据时才应退回 follower。
-
-- P1：收到合法 `Append` 时没有清空本地 candidate/leader 状态。节点可能一边接受其它 leader 的复制，一边仍保留自己的 candidate/leader 内存态。
 
 - P1：`AppendRequest` 没有校验窗口合法性。空 `terms` 会触发 `unwrap()` panic；`terms.len() != cmds.len()` 可能导致 term array 和 command array 分叉。
 

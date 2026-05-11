@@ -468,6 +468,14 @@ where
             // equal
         }
 
+        if self.leader.take().is_some() {
+            log::info!(
+                "stepping down after Append node={} append_term={}",
+                self.id,
+                append.term
+            );
+        }
+
         let start = append.assume_matched_at;
         let end = append.assume_matched_at + append.terms.len() as u64;
         let end = end.min(self.storage.cmds_len().await);
@@ -903,5 +911,31 @@ mod tests {
         let metrics = core.metrics_snapshot().await;
         assert_eq!(metrics.role, NodeRole::Leader);
         assert_eq!(metrics.term, 1);
+    }
+
+    #[tokio::test]
+    async fn handle_append_clears_local_leader_state() {
+        let mut core = new_core(vec![0, 1], 1, Membership::new(vec![1, 2, 3]));
+
+        core.leader = Some(LeaderState {
+            term: 1,
+            granted_votes: [1, 2].into(),
+            established: true,
+            replications: Default::default(),
+            pending_writes: Default::default(),
+        });
+
+        let append = AppendRequest {
+            term: 1,
+            assume_matched_at: 0,
+            terms: vec![0, 1],
+            cmds: vec![Cmd::empty(), Cmd::empty()],
+        };
+
+        let reply = core.handle_append(append).await.unwrap();
+
+        assert_eq!(reply.matched.unwrap(), LogId::new(1, 1));
+        assert!(core.leader.is_none());
+        assert_eq!(core.storage.cmds_len().await, 2);
     }
 }
