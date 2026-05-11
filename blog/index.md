@@ -1,4 +1,4 @@
-# Raf: 不要 Term 的 Raft：Log Index 作为逻辑时间
+# Raf: 去掉 Raft 的 Term
 
 > 摘要：`raf: Raft without [T]erm` 是一个实验性的 Raft 变体。它不再单独持久化 `currentTerm`，而是让 candidate 在发起 election 时占用一个 log index，并把这个 index 作为 leader term。这样做不会取消 Raft 的逻辑时间模型，而是简化了 term 在存储中的来源。
 
@@ -6,7 +6,7 @@
 
 ## 导读
 
-我之前看到过一些有趣的尝试，想把 Raft 里的 term 去掉。这个想法很吸引人：如果一个共识协议能少维护一份持久化状态，它的模型和实现也许都会更简单。但 Raft 的 term 并不是普通的计数器，它承担着逻辑时间、leader 新旧判断和 log 安全提交的角色。因此，真正的问题不是能不能直接删除 term，而是能不能换一种方式来表达它。
+我之前看到过一些有趣的提议，想把 Raft 里的 term 去掉。这个想法很吸引人：如果一个共识协议能少维护一份持久化状态，它的模型和实现也许都会更简单。但 Raft 的 term 并不是普通的计数器，它承担着逻辑时间、leader 新旧判断和 log 安全提交的角色。因此，真正的问题不是能不能直接删除 term，而是能不能换一种方式来表达它。
 
 `raf` 的名字来自 `Raft without [T]erm`。这里的 “without term” 不是说协议里完全没有 term，而是不再把 `currentTerm` 作为独立字段持久化。这个仓库想把这个想法认真落成一个尽量正确的实现：不单独保存 `currentTerm`，但仍然让 Raft 需要 term 的地方有一个可靠的逻辑时间来源。
 
@@ -66,7 +66,7 @@ struct RafStorage {
 
 <!-- [ASCII source](assets/storage-layout.txt) -->
 
-![Storage layout](assets/storage-layout.svg)
+![Storage layout](assets/storage-layout.png)
 
 逐个 index 看，这段状态表示：
 
@@ -155,13 +155,13 @@ let last_log_id = (terms[last_log_index], last_log_index);
 
 <!-- [ASCII source](assets/leader-election-term4.txt) -->
 
-![Leader election term=4](assets/leader-election-term4.svg)
+![Leader election term=4](assets/leader-election-term4.png)
 
 如果 term `4` 的 election 没有形成 quorum，它只会在 `terms` 中留下一个已经观察到的 term index，不会产生新的 command。下一次 election 会继续使用 `terms.len()`，也就是 term `5`。
 
 <!-- [ASCII source](assets/leader-election-term5.txt) -->
 
-![Leader election retry term=5](assets/leader-election-term5.svg)
+![Leader election retry term=5](assets/leader-election-term5.png)
 
 这时 `last_log_id` 仍然是 `(2, 3)`，因为 `cmds` 仍然没有超过 index `3`；变化的是新的 candidate term 从 `4` 前进到 `5`。只有当某次 election 成功并建立 leader 后，系统才会用 empty command 把 `cmds` 补到对应的 term index。
 
@@ -191,7 +191,7 @@ let can_vote =
 
 <!-- [ASCII source](assets/request-vote.txt) -->
 
-![RequestVote scenarios](assets/request-vote.svg)
+![RequestVote scenarios](assets/request-vote.png)
 
 三种结果分别是：
 
@@ -253,7 +253,7 @@ struct ReplicationState {
 
 <!-- [ASCII source](assets/establish-leader.txt) -->
 
-![Establish leader](assets/establish-leader.svg)
+![Establish leader](assets/establish-leader.png)
 
 在这个例子里，term `4` 是之前失败 election 留下的 term index；term `5` 是当前 leader 当选时占用的 index。当 term `5` 的 candidate 成为 established leader 后，index `4` 和 index `5` 都会被补上 `ø`。其中 index `5` 上的 `ø` 就是这个 leader 的第一条 log entry。
 
@@ -289,7 +289,7 @@ struct Append {
 
 <!-- [ASCII source](assets/append-replication.txt) -->
 
-![Append replication scenarios](assets/append-replication.svg)
+![Append replication scenarios](assets/append-replication.png)
 
 三种结果分别是：
 
@@ -330,7 +330,7 @@ if quorum_has_matched(index) && index >= leader.term {
 
 <!-- [ASCII source](assets/not-committed.txt) -->
 
-![Not committed yet](assets/not-committed.svg)
+![Not committed yet](assets/not-committed.png)
 
 如果随后出现 term `7` 的新 leader，并且它的 `last_log_id=(5,6)` 更大，那么它可以用自己覆盖这些未提交 log entries。这里 `{x}` 标出被新 leader 替换的范围：
 
