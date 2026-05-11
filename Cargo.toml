@@ -1,14 +1,29 @@
 [package]
-name        = "raf"
-version     = "0.0.1"
-edition     = "2024"
-description = "Raft without [T]erm — experimental consensus protocol"
-license     = "Apache-2.0"
-repository  = "https://github.com/drmingdrmer/raf"
-readme      = "README.md"
-keywords    = ["raft", "consensus", "distributed"]
-categories  = ["algorithms", "asynchronous", "data-structures"]
+name          = "raf"
+version       = "0.0.1"
+edition       = "2024"
+rust-version  = "1.85"
+authors       = ["Zhang Yanpo"]
+description   = "Experimental Raft variant that binds leader terms to log indexes"
+license       = "Apache-2.0"
+readme        = "README.md"
+homepage      = "https://github.com/drmingdrmer/raf"
+repository    = "https://github.com/drmingdrmer/raf"
+documentation = "https://docs.rs/raf"
+keywords      = ["raft", "consensus", "distributed", "async", "experimental"]
+categories    = ["algorithms", "asynchronous", "data-structures"]
+include       = [
+    "Cargo.toml",
+    "README.md",
+    "LICENSE",
+    "DESIGN.md",
+    "examples/**",
+    "src/**",
+]
 
 [dependencies]
 log   = "0.4"
 tokio = { version = "1", features = ["rt", "rt-multi-thread", "sync", "macros", "time"] }
+
+[package.metadata.docs.rs]
+all-features = true
