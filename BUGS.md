@@ -6,9 +6,9 @@
 
 - P0：同一个 voter 可以在同一个 term 给多个 candidate 投票。当前修复通过拒绝 `req.term < local_next_term_slot` 的 `RequestVote`，避免已经存在的 term slot 被再次授予。
 
-## 待修复
+- P0：单节点集群永远不会成为 leader。当前修复在 election 初始化 self-vote 后立即检查 quorum，单节点可以直接成为 established leader。
 
-- P0：单节点集群永远不会成为 leader。当前 self-vote 后只在收到 peer vote reply 时检查 quorum；单节点没有 peer reply，因此会停在 candidate。
+## 待修复
 
 - P1：candidate 收到任意 rejected vote 就直接 step down。在多节点集群里，一个 follower 拒绝不代表 candidate 不能从其它节点获得 quorum；只有观察到更高 term 或等价的更强 stale 证据时才应退回 follower。
 

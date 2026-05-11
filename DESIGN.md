@@ -110,7 +110,8 @@ leader 发给 peer，用于探测匹配点并复制日志窗口。
 1. 取 `term = terms.len()`。
 2. 创建 `LeaderState`，并把自己的 node id 加入 `granted_votes`。
 3. 写入 `terms[term] = term`，保留该 index slot。
-4. 向其它节点发送 `RequestVote { term, last_log_id }`。
+4. 立即检查 self-vote 是否已经达到 quorum；单节点集群会直接成为 established leader。
+5. 如果还没有 quorum，向其它节点发送 `RequestVote { term, last_log_id }`。
 
 ### 处理 RequestVote
 

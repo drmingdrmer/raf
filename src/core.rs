@@ -173,7 +173,12 @@ where
 
         self.storage.update_terms(term, &[term]).await;
 
-        self.spawn_request_vote_rpcs(term).await?;
+        let granted_votes = self.leader.as_ref().unwrap().granted_votes.iter().copied().collect::<Vec<_>>();
+        if self.membership.is_quorum(&granted_votes) {
+            self.establish_leader().await;
+        } else {
+            self.spawn_request_vote_rpcs(term).await?;
+        }
 
         Ok(())
     }
@@ -881,5 +886,22 @@ mod tests {
         let reply = core.handle_request_vote(req).await.unwrap();
         assert!(!reply.granted);
         assert_eq!(reply.next_term_slot, 2);
+    }
+
+    #[tokio::test]
+    async fn single_node_election_establishes_leader_from_self_vote() {
+        let mut core = new_core(vec![0], 1, Membership::new(vec![1]));
+
+        core.do_elect().await.unwrap();
+
+        let leader = core.leader.as_ref().unwrap();
+        assert!(leader.established);
+        assert!(leader.granted_votes.contains(&1));
+        assert_eq!(core.storage.terms_len().await, 2);
+        assert_eq!(core.storage.cmds_len().await, 2);
+
+        let metrics = core.metrics_snapshot().await;
+        assert_eq!(metrics.role, NodeRole::Leader);
+        assert_eq!(metrics.term, 1);
     }
 }
