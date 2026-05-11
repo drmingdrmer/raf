@@ -1,36 +1,36 @@
 # Raf: 不要 Term 的 Raft：Log Index 作为逻辑时间
 
-> 摘要：`raf: Raft without [T]erm` 是一个实验性的 Raft 变体。它不再单独持久化 `currentTerm`，而是让 candidate 在发起选举时占用一个 log index，并把这个 index 作为 leader term。这样做不会取消 Raft 的逻辑时间模型，而是简化了 term 在存储中的来源。
+> 摘要：`raf: Raft without [T]erm` 是一个实验性的 Raft 变体。它不再单独持久化 `currentTerm`，而是让 candidate 在发起 election 时占用一个 log index，并把这个 index 作为 leader term。这样做不会取消 Raft 的逻辑时间模型，而是简化了 term 在存储中的来源。
 
 > 声明：这篇文章的想法来自 Zhang Yanpo，代码由 Zhang Yanpo 古法编程实现，文章由 Codex 起草并改进。
 
 ## 导读
 
-我之前看到过一些有趣的尝试，想把 Raft 里的 term 去掉。这个想法很吸引人：如果一个共识协议能少维护一份持久化状态，它的模型和实现也许都会更简单。但 Raft 的 term 并不是普通的计数器，它承担着逻辑时间、leader 新旧判断和 log 安全提交的角色。所以这个仓库想做的不是简单删除 term，而是把这个想法认真落成一个尽量正确的实现：不单独保存 `currentTerm`，但仍然让 Raft 需要 term 的地方有一个可靠的逻辑时间来源。
+我之前看到过一些有趣的尝试，想把 Raft 里的 term 去掉。这个想法很吸引人：如果一个共识协议能少维护一份持久化状态，它的模型和实现也许都会更简单。但 Raft 的 term 并不是普通的计数器，它承担着逻辑时间、leader 新旧判断和 log 安全提交的角色。因此，真正的问题不是能不能直接删除 term，而是能不能换一种方式来表达它。
 
-这个仓库是一个实验项目，用来探索 Raft 协议是否可以在保持核心安全语义的前提下进一步简化。它更像一个小型研究笔记，用代码验证一个问题：如果不单独持久化 `currentTerm`，而是把 leader term 绑定到 log index，Raft 的 election、replication 和 commit 是否还能自然地表达。
+`raf` 的名字来自 `Raft without [T]erm`。这里的 “without term” 不是说协议里完全没有 term，而是不再把 `currentTerm` 作为独立字段持久化。这个仓库想把这个想法认真落成一个尽量正确的实现：不单独保存 `currentTerm`，但仍然让 Raft 需要 term 的地方有一个可靠的逻辑时间来源。
 
-这篇文章解释 `raf` 的核心想法：term 作为概念仍然存在，log 仍然用 `(term, index)` 比较新旧，但 term 不再来自独立递增的持久化计数器，而是来自一次选举占用的 log index。这个实现的目标不是证明自己和标准 Raft 在所有工程行为上完全等价，而是观察这种存储表达是否仍能保留 Raft 最重要的安全直觉。后文会依次介绍存储模型、选举、复制、commit，以及仓库里的三节点示例。
+这篇文章解释的就是这个核心想法：term 作为概念仍然存在，log 仍然用 `(term, index)` 比较新旧，但 term 不再来自独立递增的持久化计数器，而是来自一次 election 占用的 log index。这个实现的目标不是证明自己和标准 Raft 在所有工程行为上完全等价，而是观察这种 storage 表达是否仍能保留 Raft 最重要的安全直觉。
 
-本文假设读者已经了解 Raft 的基本流程，包括 leader election、AppendEntries、quorum commit 和 `(term, index)` 形式的 log id。
+后文会依次介绍 storage 模型、election、replication、commit，以及仓库里的三节点示例。本文假设读者已经了解 Raft 的基本流程，包括 leader election、AppendEntries、quorum commit 和 `(term, index)` 形式的 log id。
 
 ## 为什么 term 不能消失
 
-在共识算法里，log 表示已经发生或将要发生的事件，term 表示这些事件所属的逻辑时间。只有 log index 是不够的，因为 index 只是某个节点本地历史的长度；在分布式系统里，一个节点看不到的更大 index 可能已经存在于其它副本上。
+在共识算法里，log 表示已经发生或将要发生的事件，term 表示这些事件所属的逻辑时间。
 
-标准 Raft 用 term 来解决这个问题：
+标准 Raft 用 term 来解决以下问题：
 
-- leader election 先推进 term，再选择 leader。
-- log 比较先比较 term，再比较 index。
+- leader election 先推进 term，再选择 leader。term 表示 leader 的先后顺序.
+- 基于上一点, log 比较先后时, 先比较所属的 term，再比较 index。
 - leader 只能在自己的 term 内安全地推进 commit。
 
 这个 term 与 Paxos 里的 ballot number 扮演的是类似角色。它让系统可以在不知道所有节点完整 log 的情况下，仍然判断哪个历史更新、更有资格成为 leader。
 
-**Log index 表示本地事件位置；term 表示跨节点比较历史时使用的逻辑时间**
+简单来说: **Log index 表示本地事件位置；term 表示跨节点比较历史时使用的逻辑时间**
 
-`raf` 保留这个概念，但改变它的存储方式。
+`raf` 保留 term 这个概念，但省去了它的存储。
 
-## 核心想法
+## 实现思路
 
 标准 Raft 通常会持久化类似下面的状态：
 
@@ -82,60 +82,62 @@ struct RafStorage {
 - index `9`：term `9` 对应的另一次 election attempt。和 index `8` 一样，当前只有 term 记录，还没有对应的 command，是否最终形成 leader 还不能从这段状态判断。
 
 
-_标准 Raft 持久化独立的 `current_term`；`raf` 把每个 index 的 term 和 command 拆成两段对齐的 `Vec`。_
+_标准 Raft 持久化独立的 `current_term` 和一个 `(term, command)` 的数组作为 log entries；`raf` 类似, 但把每个 index 的 term 和 command 拆成两段对齐的 `Vec`。_
 
-这个结构并不是说 log entry 没有 term。相反，每个 log index 仍然可以找到对应的 leader term。它去掉的是单独的 `currentTerm` 存储项，并让一次选举占用的 index 同时承担 term 的身份。
 
-## 存储模型
+## storage 模型
 
-index `0` 是固定存在的默认项：
+index `0` 是固定存在的默认项(简化类型, 不需要用`Option`)：
 
 ```text
 terms[0] = 0
 cmds[0]  = empty
 ```
 
-当两个 `Vec` 在同一个 index 上都有值时，该 index 对应一条完整 log entry：
+当两个 `Vec` 在同一个 index 上都有值时，该 index 对应一条完整 log entry,
+否则, 对应的 index 没有 cmd, 只有 term, 表示正在进行选举的状态，还没有日志写入到这个位置：
 
 ```text
 log[index] = (terms[index], cmds[index])
 log_id     = (terms[index], index)
 ```
 
-_`terms` 和 `cmds` 共享同一个 log index；选举期间，`terms` 可以短暂领先于 `cmds`。_
+_`terms` 和 `cmds` 共享同一个 log index；election 期间，`terms` 领先于 `cmds`。_
 
-在选举期间，`terms` 可以短暂比 `cmds` 长。原因是 candidate 会先占用一个 index 作为 term；只有当它成为 established leader 后，才会用一条 empty command 把 `cmds` 补齐。
+在 election 期间，`terms` 可以短暂比 `cmds` 长。原因是 candidate 会先占用一个 index 作为 term (多次未成功选举会占用多个 index 作为 term)；只有当它成为 established leader 后，才会用一条 empty command 把 `cmds` 补齐。
 
 因此这个实现需要维持两个基本事实：
 
 - `cmds` 不应比 `terms` 长。
 - 对所有 index `i`，都应满足 `i >= terms[i]`。
 
-第二个不变量来自这个设计本身：term 是某次选举占用的 log index，所以一个 log entry 记录的 term 不能大于它自己的 index。
+第二个不变量来自这个设计本身：
+最开始生成一个 term 的时候是使用一个 log index 去作为 term 的值。
+当这个 leader established 后, 开始 append log entries 的时候，都会用这个 term 去填充 terms 数组对应的位置。
+所以每个 terms 里面的元素都小于等于它的 index。
 
 ## 为什么拆成 `terms` 和 `cmds`
 
-这个实现把 leader term 和 application command 分成两个 `Vec`，不是为了改变 Raft 的语义，而是为了让存储层有更清晰的优化空间。
+这个实现把 leader term 和 application command 分成两个 `Vec`，和 Raft 的语义无关，而是为了让存储层有更清晰的优化空间。
 
 例如，一个 leader 任期内可能连续写入大量 log entries，这些 log entries 的 term 都相同。存储实现可以把连续相同的 term 压缩成更紧凑的表示，而 commands 则按应用需要存储。两者分开之后，term 的压缩、command 的持久化、payload 的编码都可以独立演进。
 
 这也是这个项目的实验价值：它尝试把 Raft 中“逻辑时间”和“log 位置”的关系表达得更紧，同时观察这种表达能否简化持久化状态。
 
-## 发起选举
+## 发起 election
 
-candidate 发起 election 时，不是读取并递增独立的 `currentTerm`，而是取 `terms` 的下一个 index 作为新 term：
+candidate 发起 election 时，取 `terms` 数组的下一个 index 作为新 term：
 
 ```rust
 let term = terms.len();
 terms.push(term);
 ```
 
-这一步有两个含义：
-
+上面的代码中:
 - candidate 声明自己要使用 `term` 作为 leader term。
-- 本地持久化已经记录：这个 index 被一次选举占用。
+- 本地持久化已经记录：这个 index 被一次 election 占用。
 
-随后 candidate 发送 `RequestVote`。请求中仍然携带标准 Raft 需要的两个关键信息：
+随后 candidate 发送 `RequestVote`。和标准 Raft 没有差别, 请求中携带两个关键信息：
 
 - `term`：candidate 要使用的 leader term。
 - `last_log_id`：candidate 最后一条完整 log entry 的 `(term, index)`。
@@ -147,7 +149,7 @@ let last_log_index = cmds.len() - 1;
 let last_log_id = (terms[last_log_index], last_log_index);
 ```
 
-这里和标准 Raft 的含义一致：voter 用它判断 candidate 的 log 是否至少和自己一样新。注意，新的 election term 来自 `terms.len()`，而 `last_log_id` 来自 `cmds.len() - 1`；因此它们可以指向不同的 index。
+这里 `last_log_id` 和标准 Raft 的含义一致：voter 用它判断 candidate 的 log 是否至少和自己一样新。注意，新的 election term 来自 `terms.len()`，而 `last_log_id` 来自 `cmds.len() - 1`；因此它们可以指向不同的 index。
 
 下面这个例子中，当前完整 log 只到 index `3`，所以 `last_log_id = (2, 3)`。candidate 发起新 election 时，取 `terms.len() = 4` 作为新的 term，并先把 index `4` 写入 `terms`。此时 `cmds` 仍然只到 index `3`，因为这个 candidate 还没有成为 established leader。
 
@@ -164,12 +166,15 @@ let last_log_id = (terms[last_log_index], last_log_index);
 这时 `last_log_id` 仍然是 `(2, 3)`，因为 `cmds` 仍然没有超过 index `3`；变化的是新的 candidate term 从 `4` 前进到 `5`。只有当某次 election 成功并建立 leader 后，系统才会用 empty command 把 `cmds` 补到对应的 term index。
 
 
-## 处理投票请求
+## Voter 处理 RequestVote 请求
 
 收到 `RequestVote` 后，voter 需要判断两件事：
 
-1. candidate 请求用作 term 的 log index 是否尚未在本地存在。
-2. candidate 的 log 是否不是 stale。
+1. candidate 请求用的 term 是否最大, 即 term 作为 log index 是否尚未在本地存在。
+2. candidate 的 log (`last_log_id`) 是否够新(不比自己的小)。
+
+这部分逻辑, 对 term 的判断之外, 跟标准的 Raft 也几乎没有区别。因为我们 term
+没有独立存储了，所以这里的 term 判断有一点点差别。
 
 可以把核心判断理解成下面的伪代码：
 
@@ -205,9 +210,10 @@ if can_vote {
 }
 ```
 
-这些默认项的值等于自己的 index，用来保持 `i >= terms[i]`。它们表示本地已经观察到对应 term index，并不表示这些 index 都已经有完整 log entry，因为对应的 `cmds` 可能还不存在。循环最后一次写入时，`index == req.term`，因此这个 voter 已经观察并接受了该 term；后续它不会再接受旧 term 或已经存在于本地 `terms` 中的 term。
+这些默认项的 term 值等于自己的 index，用来保持 `i >= terms[i]`。它们表示本地已经观察到对应 term index，并不表示这些 index 都已经有完整 log entry，因为对应的 `cmds` 可能还不存在。循环最后一次写入时，`index == req.term`，因此这个 voter 已经观察并接受了该 term；后续它不会再接受旧 term 或已经存在于本地 `terms` 中的 term。
 
-这部分替代了标准 Raft 中持久化 `currentTerm` 的角色，但它不完全等价于标准 Raft 的 `votedFor`。当前实现没有持久化“这个 term 投给了谁”，因此 RequestVote 重试和节点重启后的行为会更保守；后面的“当前边界”会单独说明这个取舍。
+这部分替代了标准 Raft 中持久化 `currentTerm` 的角色，但它不完全等价于标准 Raft 的 `votedFor`。
+当前实现没有持久化“这个 term 投给了谁”，因此 RequestVote 重试和节点重启后的行为会更保守；后面的“当前边界”会单独说明这个取舍。
 
 _candidate 选择 `terms.len()` 作为 term；其它节点在本地 `terms` 中记录这个 term 并授予投票。_
 
@@ -233,15 +239,17 @@ struct ReplicationState {
 
 这里最重要的是三类信息：
 
-- `term`：这个 leader 当选时占用的 log index。后续由它产生的 log entries 都会写入这个 term。
+- `term`：这个 leader 当选时占用的 log index。后续由它产生的 log entries 都会再 terms 数组里对应的 index 写入这个 term。
 - `granted_nodes`：已经授予这次 leadership 的节点 ID。它证明这个 leader 是由 quorum 选出来的。
-- `replications`：leader 视角下每个节点的复制进度。`matched` 表示该节点已知匹配到的最大 index；`end` 是继续探测或复制时使用的上界；`inflight` 用来避免对同一个节点同时发送多个 Append 请求。
+- `replications`：leader 视角下每个节点的 replication progress。`matched` 表示该节点已知匹配到的最大 index；`end` 是继续探测或 replication 时使用的上界；`inflight` 用来避免对同一个节点同时发送多个 Append 请求。
 
-leader 自己也会有一份 replication state。这样计算 commit 时可以统一处理：只需要看哪些节点的 `matched` 覆盖了某个 index，并判断这些节点是否组成 quorum。
+> leader 自己也会有一份 replication state。
+> 这样计算 commit 时可以统一处理：
+> 只需要看哪些节点的 `matched` 覆盖了某个 index，并判断这些节点是否组成 quorum。
 
-_Established leader 保存本次 leadership 的 term、已授予节点集合，以及每个节点的 replication progress。_
 
-建立 leader 之后，本地 `terms` 中已经存在但 `cmds` 还缺失的位置都会被补成 empty command。这样做之后，leader 本地的每个已知 term index 都有对应 command，后续新的业务写入就可以从下一个 index 开始。
+建立 leader 之后，本地 `terms` 存储中已经存在但 `cmds` 还缺失的位置都会被补成 empty command。
+这样做之后，leader 本地的每个 index 都有对应 command，后续新的业务写入就可以从下一个 index 开始。
 
 <!-- [ASCII source](assets/establish-leader.txt) -->
 
@@ -260,7 +268,7 @@ cmds.push(user_cmd);
 
 所以在一个 leader 任期内，后续 log entries 的 `terms[i]` 都相同。这与标准 Raft 的行为一致，只是 term 的来源不同。
 
-## 复制 log
+## replication log
 
 leader 向其它节点发送 Append 请求。逻辑上，请求携带一段从 `start` 开始的连续 log：
 
@@ -298,13 +306,13 @@ struct Append {
 5. 覆盖本地 `terms` 中本次请求对应的范围。
 6. 只追加本地缺失的 commands。
 
-_Append 找到共同前缀，截断 follower 的冲突后缀，再复制 leader 缺失的 log entries。_
+_Append 找到共同前缀，截断 follower 的冲突后缀，再 replication leader 缺失的 log entries。_
 
-这个流程仍然是 Raft 的核心复制模型：leader 找到双方共同的 log 前缀，然后用自己的后缀覆盖 follower 的分歧历史。
+这个流程仍然是 Raft 的核心 replication 模型：leader 找到双方共同的 log 前缀，然后用自己的后缀覆盖 follower 的分歧历史。
 
 ## 推进 commit
 
-复制到 quorum 不等于立刻提交所有历史。标准 Raft 有一个重要规则：leader 只能直接提交自己当前 term 内的 log entry；旧 term 的 log entries 需要被当前 term 的 log entry 间接带上。
+replication 到 quorum 不等于立刻提交所有历史。标准 Raft 有一个重要规则：leader 只能直接提交自己当前 term 内的 log entry；旧 term 的 log entries 需要被当前 term 的 log entry 间接带上。
 
 `raf` 保留这个规则。因为当前 leader 的 log 从它当选时占用的 index 开始，所以 leader 在计算 commit 时只考虑已经进入当前 leader 历史范围的 matched index。
 
@@ -318,7 +326,7 @@ if quorum_has_matched(index) && index >= leader.term {
 
 这样做的目的和标准 Raft 一样：一旦某个 index 被提交，后续任何合法 leader 都必须包含它，不能再覆盖它。
 
-下面这个状态展示了为什么不能只看“是否复制到 quorum”。term `6` 的 leader 已经把 index `4` 和 `5` 的旧 log entries 复制到了 quorum `A+B`，但 quorum 还没有匹配到这个 leader 自己的 term index `6`，所以 index `4` 和 `5` 仍然不能被提交：
+下面这个状态展示了为什么不能只看“是否 replication 到 quorum”。term `6` 的 leader 已经把 index `4` 和 `5` 的旧 log entries replication 到 quorum `A+B`，但 quorum 还没有匹配到这个 leader 自己的 term index `6`，所以 index `4` 和 `5` 仍然不能被提交：
 
 <!-- [ASCII source](assets/not-committed.txt) -->
 
@@ -368,7 +376,7 @@ _如果 RequestVote reply 丢失，重试会遇到已存在的 term；可选的 
 
 ## 总结
 
-`raf` 并不是一个“没有 term 的 Raft”。它仍然有 term，也仍然用 `(term, index)` 比较 log 新旧。它真正去掉的是独立持久化的 `currentTerm`，并把 leader term 绑定到一次选举占用的 log index。
+`raf` 并不是一个“没有 term 的 Raft”。它仍然有 term，也仍然用 `(term, index)` 比较 log 新旧。它真正去掉的是独立持久化的 `currentTerm`，并把 leader term 绑定到一次 election 占用的 log index。
 
 这个变化让存储状态变成两段按 index 对齐的 `Vec`：
 
@@ -379,6 +387,8 @@ struct RafStorage {
 }
 ```
 
-选举时，candidate 用 `terms.len()` 选择 term；成为 leader 后，后续 log entries 都写入这个 term；复制和提交仍然沿用 Raft 的基本规则。
+election 时，candidate 用 `terms.len()` 选择 term；成为 leader 后，后续 log entries 都写入这个 term；replication 和提交仍然沿用 Raft 的基本规则。
+
+这个设计还有一个意外的好处：失败的 election 也会在 `terms` 中留下对应的 term index。它们不会自动变成完整 log entry，但会让系统曾经观察到哪些 election attempt 变得可见。对调试 leader 抖动、频繁 election 或网络分区期间的状态变化，这可能会提供一些额外线索。
 
 这就是这个实验实现的核心：不改变 Raft 的逻辑时间模型，只改变这个逻辑时间在持久化状态中的来源。
