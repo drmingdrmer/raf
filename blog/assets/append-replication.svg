@@ -41,9 +41,9 @@
   <text class="title" x="20" y="26">Append</text>
 
   <!-- ============ Leader ============ -->
-  <text class="label" x="252" y="50">start = 3</text>
-  <text class="label" x="252" y="70">terms = [2, 5, 5]</text>
-  <text class="label" x="252" y="90">cmds  = [c3, ø, c5]</text>
+  <text class="label" x="252" y="50">prev_log_id = (2, 3)</text>
+  <text class="label" x="252" y="70">terms = [5, 5]</text>
+  <text class="label" x="252" y="90">cmds  = [ø, c5]</text>
   <line class="arrow" x1="242" y1="56" x2="242" y2="108"/>
 
   <text class="label" x="62" y="140" text-anchor="end">terms</text>
@@ -53,7 +53,7 @@
   <text class="code" x="142" y="141" text-anchor="middle">1</text>
   <rect class="entry-term" x="170" y="118" width="44" height="32" rx="3"/>
   <text class="code" x="192" y="141" text-anchor="middle">2</text>
-  <rect class="entry-term-payload" x="220" y="118" width="44" height="32" rx="3"/>
+  <rect class="entry-match" x="220" y="118" width="44" height="32" rx="3"/>
   <text class="code" x="242" y="141" text-anchor="middle">2</text>
   <rect class="entry-term-payload" x="270" y="118" width="44" height="32" rx="3"/>
   <text class="code" x="292" y="141" text-anchor="middle">5</text>
@@ -67,7 +67,7 @@
   <text class="code" x="142" y="185" text-anchor="middle">ø</text>
   <rect class="entry" x="170" y="162" width="44" height="32" rx="3"/>
   <text class="code" x="192" y="185" text-anchor="middle">ø</text>
-  <rect class="entry-cmd-payload" x="220" y="162" width="44" height="32" rx="3"/>
+  <rect class="entry-match" x="220" y="162" width="44" height="32" rx="3"/>
   <text class="code" x="242" y="185" text-anchor="middle">c3</text>
   <rect class="entry-empty-payload" x="270" y="162" width="44" height="32" rx="3"/>
   <text class="code" x="292" y="185" text-anchor="middle">ø</text>
@@ -75,8 +75,8 @@
   <text class="code" x="342" y="185" text-anchor="middle">c5</text>
 
   <!-- payload range box -->
-  <rect class="payload-box" x="216" y="114" width="152" height="84" rx="4"/>
-  <text class="small" x="292" y="208" text-anchor="middle">Append payload</text>
+  <rect class="payload-box" x="266" y="114" width="102" height="84" rx="4"/>
+  <text class="small" x="317" y="208" text-anchor="middle">Append entries</text>
 
   <line class="arrow" x1="55" y1="226" x2="440" y2="226"/>
   <text class="node-label" x="448" y="230">Leader</text>
@@ -145,8 +145,8 @@
   <text class="small" x="482" y="434" text-anchor="middle">6</text>
   <text class="small" x="532" y="434" text-anchor="middle">7</text>
 
-  <!-- ============ Follower 2: conflict at start ============ -->
-  <text class="label-rejected" x="130" y="464">conflict at start</text>
+  <!-- ============ Follower 2: conflict at prev_log_id ============ -->
+  <text class="label-rejected" x="130" y="464">conflict at prev_log_id</text>
 
   <text class="label" x="152" y="496" text-anchor="end">terms</text>
   <rect class="entry-term" x="160" y="474" width="44" height="32" rx="3"/>

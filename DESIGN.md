@@ -96,19 +96,19 @@ leader 发给其它节点，用于探测已匹配的日志前缀，并复制一�
 |---|---|
 | `term` | leader term。 |
 | `commit_index` | leader 已知 committed 的最大 index；follower 可用它推进本地 commit。 |
-| `assume_matched_at` | 本次请求携带的第一条日志 index。 |
-| `terms` | 从 `assume_matched_at` 开始的 `Vec<Term>`。 |
-| `cmds` | 从 `assume_matched_at` 开始的 `Vec<Cmd>`，与 `terms` 等长且顺序一致。 |
+| `prev_log_id` | 本次请求携带 entries 之前的 log id。follower 必须先用它匹配自己的 log。 |
+| `terms` | `prev_log_id.index + 1` 开始的真实 `Vec<Term>`。 |
+| `cmds` | `prev_log_id.index + 1` 开始的真实 `Vec<Cmd>`，与 `terms` 等长且顺序一致。 |
 
 ### AppendReply
 
 | 字段 | 含义 |
 |---|---|
 | `term` | responder 当前看到的最新 term。leader 用它判断自己是否 stale。 |
-| `matched` | 如果请求中至少一条日志匹配或被接受，返回最后一条已匹配日志的 `LogId`。 |
-| `conflict` | 如果请求中的第一条日志就不匹配，返回冲突 index。 |
+| `matched` | 如果 `prev_log_id` 匹配且 entries 被接受，返回最后一条已匹配日志的 `LogId`；如果 entries 为空，返回 `prev_log_id`。 |
+| `conflict` | 如果 `prev_log_id` 不存在或 term 不匹配，返回冲突 index。 |
 
-`matched` 和 `conflict` 语义上互斥。空 `Append` 返回 `matched = None` 且 `conflict = None`。
+`matched` 和 `conflict` 语义上互斥。entries 为空的 `Append` 仍然会匹配 `prev_log_id`：匹配成功返回 `matched = Some(prev_log_id)`，匹配失败返回 `conflict = Some(prev_log_id.index)`。
 
 ## Election
 
@@ -166,9 +166,10 @@ leader 对每个目标节点保存：
 
 `try_initialize_replication()` 对每个没有 inflight RPC 的目标节点：
 
-1. 计算 `start = (matched + end) / 2`。
-2. 从 `start` 开始读取至多 64 条日志对应的 `terms` 和 `cmds`。
-3. 发送 `Append { term, commit_index, assume_matched_at: start, terms, cmds }`。
+1. 计算 `prev_index = (matched + end) / 2`。
+2. 从 leader 本地 log 读取 `prev_log_id = log_id(prev_index)`。
+3. 从 `prev_index + 1` 开始读取至多 64 条真实日志对应的 `terms` 和 `cmds`。
+4. 发送 `Append { term, commit_index, prev_log_id, terms, cmds }`。
 
 这个 RPC 同时用于二分探测匹配点和复制缺失日志。
 
@@ -177,17 +178,16 @@ leader 对每个目标节点保存：
 收到 `Append` 后，follower：
 
 1. 要求 `terms.len() == cmds.len()`；长度不等说明请求 malformed，直接 panic。
-2. 如果 `terms` 和 `cmds` 都为空，返回空回复：`matched = None` 且 `conflict = None`。
-3. 如果 `append.term < local_last_term`，返回本地 term，并不匹配任何 index。
-4. 否则清空本地 candidate/leader 内存态，退回 follower。
-5. 从 `assume_matched_at` 开始逐个 index 比较本地 `terms` 与请求 `terms`。
-6. 如果第一个 index 就不匹配，返回 `conflict = Some(assume_matched_at)`。
-7. 如果存在匹配前缀：
-   - 如果本地 commands 与 leader 分歧，截断到 `last_matched + 1`。
+2. 如果 `append.term < local_last_term`，返回本地 term，并不匹配任何 index。
+3. 否则清空本地 candidate/leader 内存态，退回 follower。
+4. 用 `prev_log_id` 匹配本地完整 log：`prev_log_id.index` 必须存在于 `cmds`，并且本地 `log_id(prev_log_id.index)` 必须等于请求的 `prev_log_id`。
+5. 如果 `prev_log_id` 不匹配，返回 `conflict = Some(prev_log_id.index)`。
+6. 从 `prev_log_id.index + 1` 开始处理请求里的真实 entries：
+   - 如果本地已有 entry 与 leader entry 分歧，从第一个分歧 index 截断本地 commands。
    - 覆盖本地 `terms` 中本次请求对应的连续范围。
    - 只追加本地缺失的 commands，避免重复追加已存在 command。
    - 如果 `commit_index < appended_last_index`，推进本地 `committed` 到 `commit_index`。
-   - 返回本次请求最后一个 index 的 `LogId`。
+   - 如果 entries 非空，返回本次请求最后一个 index 的 `LogId`；如果 entries 为空，返回 `prev_log_id`。
 
 ### 处理 AppendReply
 

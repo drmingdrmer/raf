@@ -268,24 +268,24 @@ cmds.push(user_cmd);
 
 所以在一个 leader 任期内，后续 log entries 的 `terms[i]` 都相同。这与标准 Raft 的行为一致，只是 term 的来源不同。
 
-## replication log
+## Log replication
 
-leader 向其它节点发送 Append 请求。逻辑上，请求携带一段从 `start` 开始的连续 log：
+leader 向其它节点发送 Append 请求。逻辑上，请求先声明一个已经匹配的前置 log id，然后携带这个位置之后的一段连续 log entries：
 
 ```rust
 struct Append {
     term: Term,
-    start: LogIndex,
+    prev_log_id: LogId,
     terms: Vec<Term>,
     cmds: Vec<Cmd>,
 }
 ```
 
-这里 `terms` 和 `cmds` 必须等长，并且都从 `start` 这个 log index 开始。`start` 是本次请求的探测点，也是请求中第一条 log entry 的 index：follower 会先检查这个 index 是否能和本地 log 匹配；如果能匹配，就继续接受后面的连续 log entries。
+这里 `prev_log_id` 是匹配点，`terms` 和 `cmds` 是匹配点之后的真实 entries。两者必须等长，并且第一项对应 `prev_log_id.index + 1`。follower 先检查自己的本地 log 在 `prev_log_id.index` 上是否有相同的 `LogId`；如果这个前置位置匹配，才继续接受后面的 entries。
 
-标准 Raft 的 AppendEntries 会单独携带 `prevLogIndex` 和 `prevLogTerm`。`raf` 的实现没有把这个匹配点单独拆出来，而是让请求中的第一条 log entry 同时承担匹配检查的角色：follower 从 `start` 开始逐个比较本地 `terms` 和请求里的 `terms`。
+这个设计和标准 Raft 的 AppendEntries 更接近：标准 Raft 会单独携带 `prevLogIndex` 和 `prevLogTerm`，`raf` 这里把它合成一个 `prev_log_id`。这样做比依赖请求里第一条 entry 作为匹配点更清楚，因为请求中的 `terms` 和 `cmds` 都只表示真正要复制的 entries。
 
-下面的图展示同一个 Append 请求面对几种 follower 状态时的结果。这个请求的 `term = 5`，`start = 3`，并携带 index `3..=5` 的连续 log entries；index `3` 是这次请求的匹配点。
+下面的图展示同一个 Append 请求面对几种 follower 状态时的结果。这个请求的 `term = 5`，`prev_log_id = (2, 3)`，并携带 index `4..=5` 的连续 log entries。
 
 <!-- [ASCII source](assets/append-replication.txt) -->
 
@@ -293,20 +293,20 @@ struct Append {
 
 三种结果分别是：
 
-- `accepted`：follower 在 `start = 3` 处和 leader 匹配，因此可以接受这段 Append。`{...}` 标出本次请求覆盖的 `terms` 范围，以及本地缺失后被追加的 command 范围。这里 index `4` 的 term 从旧值更新成 `5`，index `5` 的 command `c5` 被追加。
-- `conflict at start`：`*` 标出 conflict position。follower 在 index `3` 的 term 是 `3`，而请求里 index `3` 的 term 是 `2`。因为第一项就不匹配，follower 直接返回 conflict index，leader 需要换一个更早的 `start` 继续探测。
+- `accepted`：follower 在 `prev_log_id = (2, 3)` 处和 leader 匹配，因此可以接受这段 Append。`{...}` 标出本次请求覆盖的 `terms` 范围，以及本地缺失后被追加的 command 范围。这里 index `4` 的 term 从旧值更新成 `5`，index `5` 的 command `c5` 被追加。
+- `conflict at prev_log_id`：`*` 标出 conflict position。follower 在 index `3` 的 term 是 `3`，而请求的 `prev_log_id` 是 `(2, 3)`。因为前置 log id 不匹配，follower 直接返回 conflict index，leader 需要换一个更早的 `prev_log_id` 继续探测。
 - `rejected: follower has newer term`：follower 已经在 index `6` 观察到 term `6`，而 Append 的 term 是 `5`。这个请求来自 stale leader，follower 不修改 log 并拒绝。
 
 处理逻辑可以概括为：
 
 1. 如果请求 term 比本地最后观察到的 term 更旧，拒绝。
-2. 如果第一条 log entry 就不匹配，返回 conflict index。
-3. 如果存在匹配前缀，保留匹配部分。
+2. 用 `prev_log_id` 匹配 follower 的本地 log；如果不匹配，返回 conflict index。
+3. 如果 `prev_log_id` 匹配，处理 `prev_log_id.index + 1` 之后的真实 entries。
 4. 如果本地后续 commands 与 leader 分歧，截断本地 commands。
 5. 覆盖本地 `terms` 中本次请求对应的范围。
 6. 只追加本地缺失的 commands。
 
-_Append 找到共同前缀，截断 follower 的冲突后缀，再 replication leader 缺失的 log entries。_
+_Append 先用 `prev_log_id` 找到共同前缀，再截断 follower 的冲突后缀，并复制 leader 缺失的 log entries。_
 
 这个流程仍然是 Raft 的核心 replication 模型：leader 找到双方共同的 log 前缀，然后用自己的后缀覆盖 follower 的分歧历史。
 

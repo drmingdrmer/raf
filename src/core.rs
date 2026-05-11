@@ -414,30 +414,31 @@ where
                 Err(_) => continue, // already inflight; skip
             };
 
-            let start = (replication.matched + replication.end) / 2;
-            let len = 64;
+            let prev_index = (replication.matched + replication.end) / 2;
+            let prev_term = self.storage.read_one_term(prev_index).await?;
+            let prev_log_id = LogId::new(prev_term, prev_index);
+            let start = prev_index + 1;
+            let cmds_len = self.storage.cmds_len().await?;
+            let len = 64.min(cmds_len.saturating_sub(start));
             let net = self.network.clone();
             let tx = self.mailbox_tx.clone();
 
-            // TODO: len should not exceed cmds.len()
-
-            // includes the last matched, will be used in the role of `prev`
             let terms = self.storage.read_terms(start..start + len).await?.entries;
             let cmds = self.storage.read_cmds(start..start + len).await?.entries;
 
             let append_request = AppendRequest {
                 term: leader.term,
                 commit_index,
-                assume_matched_at: start,
+                prev_log_id,
                 terms,
                 cmds,
             };
             let target = replication.target;
             log::debug!(
-                "sending Append from={} to={target} term={} start={} terms={} cmds={}",
+                "sending Append from={} to={target} term={} prev_log_id={:?} terms={} cmds={}",
                 self.id,
                 leader.term,
-                append_request.assume_matched_at,
+                append_request.prev_log_id,
                 append_request.terms.len(),
                 append_request.cmds.len()
             );
@@ -472,15 +473,6 @@ where
         );
 
         let last_term = self.storage.last_term().await?;
-        if append.terms.is_empty() {
-            log::debug!("ignoring empty Append node={} append_term={}", self.id, append.term);
-            return Ok(AppendReply {
-                term: last_term,
-                matched: None,
-                conflict: None,
-            });
-        }
-
         if append.term > last_term {
             // TODO: save last-seen, instead of updating terms. Updating terms means accepting a
             // RequestVote.
@@ -507,44 +499,58 @@ where
             );
         }
 
-        let start = append.assume_matched_at;
-        let end = append.assume_matched_at + append.terms.len() as u64;
-        let end = end.min(self.storage.cmds_len().await?);
+        let prev_index = append.prev_log_id.index;
+        let cmds_len = self.storage.cmds_len().await?;
+        if prev_index >= cmds_len {
+            log::debug!(
+                "Append prev missing node={} prev_log_id={:?} cmds_len={cmds_len}",
+                self.id,
+                append.prev_log_id
+            );
+            return Ok(AppendReply {
+                term: last_term,
+                matched: None,
+                conflict: Some(prev_index),
+            });
+        }
 
-        // find the matches
+        let local_prev_term = self.storage.read_one_term(prev_index).await?;
+        let local_prev_log_id = LogId::new(local_prev_term, prev_index);
+        if local_prev_log_id != append.prev_log_id {
+            log::debug!(
+                "Append prev conflict node={} req_prev={:?} local_prev={local_prev_log_id:?}",
+                self.id,
+                append.prev_log_id
+            );
+            return Ok(AppendReply {
+                term: last_term,
+                matched: None,
+                conflict: Some(prev_index),
+            });
+        }
 
-        let local_terms = self.storage.read_terms(start..end).await?.entries;
-        let mut last_matched = None;
+        let start = prev_index + 1;
+        let end = start + append.terms.len() as u64;
+        let local_end = end.min(cmds_len);
+        let local_terms = self.storage.read_terms(start..local_end).await?.entries;
+        let mut append_from = local_terms.len();
 
-        for i in start..end {
-            if local_terms[(i - start) as usize] == append.terms[(i - start) as usize] {
-                last_matched = Some(i);
-            } else {
+        for i in start..local_end {
+            let offset = (i - start) as usize;
+            if local_terms[offset] != append.terms[offset] {
+                self.storage.truncate_cmds(i).await?;
+                append_from = offset;
                 break;
             }
         }
 
-        let Some(last_matched) = last_matched else {
-            log::debug!("Append conflict node={} start={start}", self.id);
-            return Ok(AppendReply {
-                term: last_term,
-                matched: None,
-                conflict: Some(start),
-            });
-        };
+        self.storage.update_terms(start, &append.terms).await?;
 
-        if last_matched < end - 1 {
-            self.storage.truncate_cmds(last_matched + 1).await?;
-        }
-
-        self.storage.update_terms(append.assume_matched_at, &append.terms).await?;
-
-        let append_from = self.storage.cmds_len().await?.saturating_sub(append.assume_matched_at) as usize;
         if append_from < append.cmds.len() {
             self.storage.append_cmds(append.cmds[append_from..].to_vec()).await?;
         }
 
-        let appended_last_index = append.assume_matched_at + append.terms.len() as u64 - 1;
+        let appended_last_index = prev_index + append.terms.len() as u64;
         if append.commit_index > self.committed && append.commit_index < appended_last_index {
             log::info!(
                 "advanced follower commit node={} from={} to={} appended_last_index={appended_last_index}",
@@ -555,16 +561,21 @@ where
             self.committed = append.commit_index;
         }
 
+        let matched = match append.terms.last() {
+            Some(term) => LogId::new(*term, appended_last_index),
+            None => append.prev_log_id,
+        };
+
         log::debug!(
             "accepted Append node={} term={} matched_index={}",
             self.id,
             append.term,
-            appended_last_index
+            matched.index
         );
 
         Ok(AppendReply {
             term: last_term,
-            matched: Some(LogId::new(*append.terms.last().unwrap(), appended_last_index)),
+            matched: Some(matched),
             conflict: None,
         })
     }
@@ -891,9 +902,9 @@ mod tests {
         let append = AppendRequest {
             term: 1,
             commit_index: 0,
-            assume_matched_at: 1,
-            terms: vec![1, 1, 1],
-            cmds: vec![Cmd::empty(); 3],
+            prev_log_id: LogId::new(1, 1),
+            terms: vec![1, 1],
+            cmds: vec![Cmd::empty(); 2],
         };
 
         let reply = core.handle_append(append).await.unwrap();
@@ -905,9 +916,9 @@ mod tests {
         let append = AppendRequest {
             term: 1,
             commit_index: 0,
-            assume_matched_at: 1,
-            terms: vec![1, 1, 1],
-            cmds: vec![Cmd::empty(); 3],
+            prev_log_id: LogId::new(1, 1),
+            terms: vec![1, 1],
+            cmds: vec![Cmd::empty(); 2],
         };
 
         let reply = core.handle_append(append).await.unwrap();
@@ -915,6 +926,27 @@ mod tests {
         assert_eq!(core.storage.terms_len().await.unwrap(), 4);
         assert_eq!(core.storage.cmds_len().await.unwrap(), 4);
         assert_eq!(reply.matched.unwrap(), LogId::new(1, 3));
+    }
+
+    #[tokio::test]
+    async fn handle_append_rejects_mismatched_prev_log_id() {
+        let mut core = new_core(vec![0, 1, 1], 3, Membership::new(vec![1, 2, 3]));
+
+        let append = AppendRequest {
+            term: 1,
+            commit_index: 0,
+            prev_log_id: LogId::new(2, 2),
+            terms: vec![1],
+            cmds: vec![Cmd::empty()],
+        };
+
+        let reply = core.handle_append(append).await.unwrap();
+
+        assert_eq!(reply.term, 1);
+        assert!(reply.matched.is_none());
+        assert_eq!(reply.conflict, Some(2));
+        assert_eq!(core.storage.terms_len().await.unwrap(), 3);
+        assert_eq!(core.storage.cmds_len().await.unwrap(), 3);
     }
 
     #[tokio::test]
@@ -1074,9 +1106,9 @@ mod tests {
         let append = AppendRequest {
             term: 1,
             commit_index: 0,
-            assume_matched_at: 0,
-            terms: vec![0, 1],
-            cmds: vec![Cmd::empty(), Cmd::empty()],
+            prev_log_id: LogId::new(0, 0),
+            terms: vec![1],
+            cmds: vec![Cmd::empty()],
         };
 
         let reply = core.handle_append(append).await.unwrap();
@@ -1093,9 +1125,9 @@ mod tests {
         let append = AppendRequest {
             term: 1,
             commit_index: 2,
-            assume_matched_at: 1,
-            terms: vec![1, 1, 1],
-            cmds: vec![Cmd::empty(); 3],
+            prev_log_id: LogId::new(1, 1),
+            terms: vec![1, 1],
+            cmds: vec![Cmd::empty(); 2],
         };
 
         let reply = core.handle_append(append).await.unwrap();
@@ -1111,9 +1143,9 @@ mod tests {
         let append = AppendRequest {
             term: 1,
             commit_index: 3,
-            assume_matched_at: 1,
-            terms: vec![1, 1, 1],
-            cmds: vec![Cmd::empty(); 3],
+            prev_log_id: LogId::new(1, 1),
+            terms: vec![1, 1],
+            cmds: vec![Cmd::empty(); 2],
         };
 
         let reply = core.handle_append(append).await.unwrap();
@@ -1123,13 +1155,13 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn handle_append_returns_empty_reply_for_empty_window() {
+    async fn handle_append_matches_prev_for_empty_window() {
         let mut core = new_core(vec![0, 1], 2, Membership::new(vec![1, 2, 3]));
 
         let append = AppendRequest {
             term: 1,
             commit_index: 0,
-            assume_matched_at: 2,
+            prev_log_id: LogId::new(1, 1),
             terms: vec![],
             cmds: vec![],
         };
@@ -1137,7 +1169,7 @@ mod tests {
         let reply = core.handle_append(append).await.unwrap();
 
         assert_eq!(reply.term, 1);
-        assert!(reply.matched.is_none());
+        assert_eq!(reply.matched.unwrap(), LogId::new(1, 1));
         assert!(reply.conflict.is_none());
         assert_eq!(core.storage.terms_len().await.unwrap(), 2);
         assert_eq!(core.storage.cmds_len().await.unwrap(), 2);
@@ -1151,7 +1183,7 @@ mod tests {
         let append = AppendRequest {
             term: 1,
             commit_index: 0,
-            assume_matched_at: 1,
+            prev_log_id: LogId::new(1, 1),
             terms: vec![1],
             cmds: vec![],
         };
