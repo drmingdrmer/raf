@@ -25,13 +25,15 @@ pub trait StorageExt: Storage {
         async move { Ok(self.read_terms(index..index + 1).await?.entries.into_iter().next().unwrap()) }
     }
 
-    /// Fill existing term slots in `[since, len)` with their own index.
-    fn fill_terms_gap(&mut self, since: u64) -> impl Future<Output = io::Result<()>> + Send {
+    /// Overwrite existing term slots in `[since, len)` with `term`.
+    fn fill_terms_gap_with(&mut self, since: u64, term: Term) -> impl Future<Output = io::Result<()>> + Send {
         async move {
             let len = self.terms_len().await?;
             let start = since.min(len);
-            for index in start..len {
-                self.update_terms(index, &[index as Term]).await?;
+            let count = len.saturating_sub(start);
+            if count > 0 {
+                let terms = vec![term; count as usize];
+                self.update_terms(start, &terms).await?;
             }
 
             Ok(())

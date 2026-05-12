@@ -1,12 +1,14 @@
 # raf
 
-**`raf`** stands for **Raft without [T]erm** — an experimental exploration of
-the [Raft][raft] distributed agreement protocol that eliminates the concept of
-the *term*.
+**`raf`** stands for **Raft without a separate [T]erm field** — an experimental
+exploration of the [Raft][raft] distributed agreement protocol that derives the
+leader term from an election-reserved log index instead of persisting
+`currentTerm` as an independent state field.
 
 > ⚠️ **Experimental**: This project is not ready for production use.  It is a
-> research prototype that explores whether removing the term from Raft yields a
-> simpler foundation for building fault-tolerant, agreement-based applications.
+> research prototype that explores whether removing the separately persisted
+> `currentTerm` field from Raft yields a simpler foundation for building
+> fault-tolerant, agreement-based applications.
 
 ---
 
@@ -22,17 +24,18 @@ transitions.
 
 ## The `raf` Approach
 
-`raf` asks: *what if the term were not needed?*  By rethinking the invariants
-that the term enforces — leader uniqueness and log freshness — it attempts to
-preserve the same safety properties through alternative mechanisms.  The result
-is a leaner protocol surface that is easier to reason about and, potentially,
-easier to implement correctly.
+`raf` asks: *what if the term did not need separate persistent storage?*  The
+term still exists as logical time, and logs are still compared by `(term,
+index)`.  What changes is where the term comes from: a candidate reserves a log
+index during election, and that index becomes the leader term.
 
 Key ideas under exploration:
 
-- **No term field** in log entries or network messages.
-- **Equivalent safety**: leader uniqueness and log-matching guarantees are
-  maintained through other invariants.
+- **No independent `currentTerm` field** in persistent state.
+- **Index-derived leader terms**: a successful election binds the leader term to
+  the reserved log index.
+- **Equivalent safety target**: leader uniqueness and log-matching guarantees
+  are maintained through the same quorum and freshness structure as Raft.
 - **Simplified API**: fewer pieces of state for application authors to manage
   when building agreement-based services.
 
@@ -53,9 +56,9 @@ discussion are welcome.
 Implementing correct distributed agreement is notoriously difficult.  Existing
 libraries often expose a great deal of internal protocol state to application
 code, making it hard to build clean, maintainable services on top of them.
-`raf` explores whether stripping the term simplifies both the implementation
-and the developer experience enough to lower the barrier to writing
-agreement-based applications.
+`raf` explores whether deriving the term from the log simplifies both the
+implementation and the developer experience enough to lower the barrier to
+writing agreement-based applications.
 
 ## License
 

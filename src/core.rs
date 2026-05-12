@@ -237,10 +237,12 @@ where
     ///
     /// Reads current state from the term and command arrays on every call.
     ///
-    /// Grant iff both:
-    /// 1. `req.term >= local.last_term` — the candidate is not behind the latest term we have
-    ///    stored or reserved.
-    /// 2. `req.last_log_id >= local.last_log_id` — the candidate's history is at least as fresh as
+    /// Grant iff:
+    /// 1. `req.term > local.last_term` — the candidate is newer than every leader term we have
+    ///    observed in a complete log entry or reserved slot.
+    /// 2. `req.term >= local.next_term_slot` — the candidate's term slot does not already exist
+    ///    locally.
+    /// 3. `req.last_log_id >= local.last_log_id` — the candidate's history is at least as fresh as
     ///    ours.
     async fn handle_request_vote(&mut self, req: RequestVote) -> Result<RequestVoteReply, io::Error> {
         let local_next_term_slot = self.storage.terms_len().await?;
@@ -256,7 +258,7 @@ where
             last_log_id: local_last_log_id.clone(),
         };
 
-        if req.term < local_last_term {
+        if req.term <= local_last_term {
             log::debug!(
                 "rejecting RequestVote node={} req_term={} local_last_term={local_last_term}",
                 self.id,
@@ -289,7 +291,7 @@ where
         // reset all leader or candidate
         self.leader = None;
 
-        self.storage.update_terms(local_next_term_slot, &[req.term]).await?;
+        self.storage.update_terms(req.term, &[req.term]).await?;
 
         log::info!(
             "granted RequestVote node={} req_term={} next_term_slot={local_next_term_slot}",
@@ -366,7 +368,7 @@ where
         let cmds_len = self.storage.cmds_len().await?;
         let n = self.storage.terms_len().await? - cmds_len;
 
-        self.storage.fill_terms_gap(cmds_len).await?;
+        self.storage.fill_terms_gap_with(cmds_len, leader.term).await?;
 
         // Occupy all entries with no-op Cmd.
         let cmds = vec![Cmd::empty(); n as usize];
@@ -1075,6 +1077,57 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn request_vote_fills_gap_to_requested_term() {
+        let mut core = new_core(vec![0, 1, 2, 2], 4, Membership::new(vec![1, 2, 3]));
+
+        let req = RequestVote {
+            term: 6,
+            last_log_id: LogId::new(2, 3),
+        };
+
+        let reply = core.handle_request_vote(req).await.unwrap();
+
+        assert!(reply.granted);
+        assert_eq!(core.storage.terms_len().await.unwrap(), 7);
+        assert_eq!(core.storage.read_terms(0..7).await.unwrap().entries, vec![
+            0, 1, 2, 2, 4, 5, 6
+        ]);
+    }
+
+    #[tokio::test]
+    async fn request_vote_rejects_repeated_gapped_term() {
+        let mut core = new_core(vec![0, 1, 2, 2], 4, Membership::new(vec![1, 2, 3]));
+
+        let req = RequestVote {
+            term: 6,
+            last_log_id: LogId::new(2, 3),
+        };
+
+        let reply = core.handle_request_vote(req.clone()).await.unwrap();
+        assert!(reply.granted);
+
+        let reply = core.handle_request_vote(req).await.unwrap();
+        assert!(!reply.granted);
+        assert_eq!(reply.next_term_slot, 7);
+    }
+
+    #[tokio::test]
+    async fn request_vote_rejects_observed_term_without_term_slot() {
+        let mut core = new_core(vec![0, 1, 2, 2, 6, 6], 6, Membership::new(vec![1, 2, 3]));
+
+        let req = RequestVote {
+            term: 6,
+            last_log_id: LogId::new(6, 5),
+        };
+
+        let reply = core.handle_request_vote(req).await.unwrap();
+
+        assert!(!reply.granted);
+        assert_eq!(reply.next_term_slot, 6);
+        assert_eq!(core.storage.terms_len().await.unwrap(), 6);
+    }
+
+    #[tokio::test]
     async fn single_node_election_establishes_leader_from_self_vote() {
         let mut core = new_core(vec![0], 1, Membership::new(vec![1]));
 
@@ -1089,6 +1142,21 @@ mod tests {
         let metrics = core.metrics_snapshot().await.unwrap();
         assert_eq!(metrics.role, NodeRole::Leader);
         assert_eq!(metrics.term, 1);
+    }
+
+    #[tokio::test]
+    async fn establish_leader_overwrites_gap_terms_with_leader_term() {
+        let mut core = new_core(vec![0, 1, 2, 2, 4, 5], 4, Membership::new(vec![1]));
+
+        core.do_elect().await.unwrap();
+
+        let leader = core.leader.as_ref().unwrap();
+        assert!(leader.established);
+        assert_eq!(leader.term, 6);
+        assert_eq!(core.storage.cmds_len().await.unwrap(), 7);
+        assert_eq!(core.storage.read_terms(0..7).await.unwrap().entries, vec![
+            0, 1, 2, 2, 6, 6, 6
+        ]);
     }
 
     #[tokio::test]

@@ -41,17 +41,11 @@ log_id     = (terms[index], index)
 
 1. 候选人用 `terms.len()` 作为新的 term。
 2. 候选人先写入 `terms[term] = term`，表示这个 index 已经被该候选人占用。
-3. 候选人成为 established leader 后，再追加一个 empty command，让 `cmds.len()` 追上 `terms.len()`。
+3. 候选人成为 established leader 后，把 `[cmds.len(), terms.len())` 这段缺失 command 的 slots 改写为当前 `leader.term`，再追加 empty commands，让 `cmds.len()` 追上 `terms.len()`。
 
 leader 之后追加的新日志项都写入同一个 `leader.term`。
 
-`terms` 必须保持一个关键不变量：
-
-```text
-i >= terms[i]
-```
-
-也就是说，index `i` 上记录的 leader term 不能大于 `i`。原因是 term 本身就是某次选举占用的 log index。
+注意：只有发起 election 时，candidate term 必须等于它占用的 log index。成为 established leader 后，它可以把更早的 incomplete slots 补成自己的 empty log entries，因此完整 log entry 上的 `terms[i]` 不再要求满足 `terms[i] <= i`。
 
 ## 组件
 
@@ -128,10 +122,10 @@ leader 发给其它节点，用于探测已匹配的日志前缀，并复制一�
 
 1. 读取本地 `terms` 的最后一个元素，得到 `local_last_term`。
 2. 读取本地最后一条 command 对应的 `local_last_log_id`。
-3. 如果 `req.term < local_last_term`，拒绝。
+3. 如果 `req.term <= local_last_term`，拒绝。当前没有持久化 `voted_for`，所以同一个已经观察过的 term 也保守拒绝。
 4. 如果 `req.term < local_next_term_slot`，拒绝。候选人请求用作 term 的 log index 在本地已经存在，不能再次授予。
 5. 如果 `req.last_log_id < local_last_log_id`，拒绝。
-6. 否则清空本地 `leader` 内存态，把 `req.term` 写入本地 `terms` 的末尾，并返回 `granted = true`。
+6. 否则清空本地 `leader` 内存态，把 `req.term` 写入本地 `terms[req.term]`。如果本地 `terms` 落后，中间缺失 slots 先按自己的 index 补齐。最后返回 `granted = true`。
 
 当前实现和标准 Raft 一样接受相同 freshness：候选人的日志不落后即可。
 
@@ -150,7 +144,8 @@ leader 发给其它节点，用于探测已匹配的日志前缀，并复制一�
 
 1. 设置 `leader.established = true`。
 2. 为每个目标节点初始化 `ReplicationState`，也包含 leader 自己。
-3. 用 empty command 补齐 `cmds`，让 `cmds.len()` 追上 `terms.len()`。
+3. 将 `[cmds.len(), terms.len())` 中的 term 全部覆盖为当前 `leader.term`。
+4. 用 empty command 补齐 `cmds`，让 `cmds.len()` 追上 `terms.len()`。
 
 复制不在 `establish_leader()` 里直接展开，而是在当前事件处理完成后由 `try_initialize_replication()` 统一触发。
 
