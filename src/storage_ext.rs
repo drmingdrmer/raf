@@ -11,7 +11,11 @@ pub trait StorageExt: Storage {
         async move { Ok(self.read_terms(range).await?.len) }
     }
 
-    /// Return the last stored term.
+    /// Return the greatest term observed in the term array.
+    ///
+    /// The final term slot is maintained as the greatest durable term evidence. The complete log
+    /// prefix is term-monotonic, but the whole term array may contain lower obsolete suffix
+    /// evidence before the final observed-term slot.
     fn last_term(&self) -> impl Future<Output = io::Result<Term>> + Send {
         async move {
             let len = self.terms_len().await?;
@@ -127,5 +131,50 @@ mod tests {
         let storage = MissingTermStorage;
 
         let _ = storage.read_one_term(0).await;
+    }
+
+    #[tokio::test]
+    async fn last_term_reads_final_observed_term_slot() {
+        struct StorageWithFinalObservedTerm;
+
+        impl Storage for StorageWithFinalObservedTerm {
+            async fn update_terms(&mut self, _since: u64, _terms: &[Term]) -> io::Result<()> {
+                Ok(())
+            }
+
+            async fn read_terms(&self, range: Range<u64>) -> io::Result<ArrayChunk<Term>> {
+                let mut terms = vec![0];
+                terms.extend(vec![100; 64]);
+                terms.extend(65..100);
+                terms.push(100);
+
+                let end = range.end.min(terms.len() as u64) as usize;
+                let start = range.start.min(end as u64) as usize;
+
+                Ok(ArrayChunk {
+                    len: terms.len() as u64,
+                    entries: terms[start..end].to_vec(),
+                })
+            }
+
+            async fn append_cmds(&mut self, _cmds: Vec<Cmd>) -> io::Result<()> {
+                Ok(())
+            }
+
+            async fn truncate_cmds(&mut self, _after: u64) -> io::Result<()> {
+                Ok(())
+            }
+
+            async fn read_cmds(&self, _range: Range<u64>) -> io::Result<ArrayChunk<Cmd>> {
+                Ok(ArrayChunk {
+                    len: 2,
+                    entries: Vec::new(),
+                })
+            }
+        }
+
+        let term = StorageWithFinalObservedTerm.last_term().await.unwrap();
+
+        assert_eq!(term, 100);
     }
 }

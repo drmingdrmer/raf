@@ -47,6 +47,10 @@ leader 之后追加的新日志项都写入同一个 `leader.term`。
 
 注意：只有发起 election 时，candidate term 必须等于它占用的 log index。成为 established leader 后，它可以把更早的 incomplete slots 补成自己的 empty log entries，因此完整 log entry 上的 `terms[i]` 不再要求满足 `terms[i] <= i`。
 
+完整 log prefix 中的 term 按 Raft 语义非递减；但整个 `terms` array 不要求非递减。`terms[cmds.len()..]` 可以保存 crash recovery 或 Append conflict repair 后留下的 incomplete term evidence，这些 slots 不是 log entry。
+
+每次观察到更高 term 时，节点都会先把 `terms[term] = term` 持久化。因此 `terms` 的最后一个 slot 是本地已经观察到的最大 term，并且一定小于 `terms.len()`。需要判断本地是否已经观察过某个 term 时，读取这个最后 slot。
+
 ## 组件
 
 - `Raf`：公开 API。负责把本地 election、入站 RPC、application write 转成 `Event` 发给 `Core`。
@@ -110,7 +114,7 @@ leader 发给其它节点，用于探测已匹配的日志前缀，并复制一�
 
 节点触发 `Raf::elect()` 后，`Core` 处理 `Event::Elect`：
 
-1. 取 `term = terms.len()`。
+1. 取 `term = terms.len()`。由于任何 observed term `t` 都会先写入 `terms[t]`，所以 `terms.len()` 一定大于本地最大 observed term。
 2. 创建 `LeaderState`，并把自己的 node id 加入 `granted_votes`。
 3. 写入 `terms[term] = term`，占用这个 index。
 4. 立即检查 self-vote 是否已经达到 quorum；单节点集群会直接成为 established leader。
@@ -120,7 +124,7 @@ leader 发给其它节点，用于探测已匹配的日志前缀，并复制一�
 
 收到 `RequestVote` 后，voter：
 
-1. 读取本地 `terms` 的最后一个元素，得到 `local_last_term`。
+1. 读取本地 `terms` 最后一个 slot，得到 `local_last_term`。
 2. 读取本地最后一条 command 对应的 `local_last_log_id`。
 3. 如果 `req.term <= local_last_term`，拒绝。当前没有持久化 `voted_for`，所以同一个已经观察过的 term 也保守拒绝。
 4. 如果 `req.term < local_next_term_slot`，拒绝。候选人请求用作 term 的 log index 在本地已经存在，不能再次授予。
@@ -174,10 +178,11 @@ leader 对每个目标节点保存：
 
 1. 要求 `terms.len() == cmds.len()`；长度不等说明请求 malformed，直接 panic。
 2. 如果 `append.term < local_last_term`，返回本地 term，并不匹配任何 index。
-3. 否则清空本地 candidate/leader 内存态，退回 follower。
-4. 用 `prev_log_id` 匹配本地完整 log：`prev_log_id.index` 必须存在于 `cmds`，并且本地 `log_id(prev_log_id.index)` 必须等于请求的 `prev_log_id`。
-5. 如果 `prev_log_id` 不匹配，返回 `conflict = Some(prev_log_id.index)`。
-6. 从 `prev_log_id.index + 1` 开始处理请求里的真实 entries：
+3. 如果 `append.term > local_last_term`，先写入 `terms[append.term] = append.term`，再继续处理后续检查。这个顺序对应标准 Raft 中先更新 `currentTerm` 再处理 RPC 的规则。
+4. 否则清空本地 candidate/leader 内存态，退回 follower。
+5. 用 `prev_log_id` 匹配本地完整 log：`prev_log_id.index` 必须存在于 `cmds`，并且本地 `log_id(prev_log_id.index)` 必须等于请求的 `prev_log_id`。
+6. 如果 `prev_log_id` 不匹配，返回 `conflict = Some(prev_log_id.index)`。
+7. 从 `prev_log_id.index + 1` 开始处理请求里的真实 entries：
    - 如果本地已有 entry 与 leader entry 分歧，从第一个分歧 index 截断本地 commands。
    - 覆盖本地 `terms` 中本次请求对应的连续范围。
    - 只追加本地缺失的 commands，避免重复追加已存在 command。

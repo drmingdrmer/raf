@@ -20,7 +20,7 @@ pub struct Metrics {
     /// Current protocol role.
     pub role: NodeRole,
 
-    /// Value stored in the last term-array slot.
+    /// Greatest term observed in the term array.
     pub term: Term,
 
     /// Greatest log index known to be committed by this node.

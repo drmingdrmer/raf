@@ -238,8 +238,8 @@ where
     /// Reads current state from the term and command arrays on every call.
     ///
     /// Grant iff:
-    /// 1. `req.term > local.last_term` — the candidate is newer than every leader term we have
-    ///    observed in a complete log entry or reserved slot.
+    /// 1. `req.term > local.observed_term` — the candidate is newer than every term we have
+    ///    observed in a complete log entry, incomplete suffix, or reserved slot.
     /// 2. `req.term >= local.next_term_slot` — the candidate's term slot does not already exist
     ///    locally.
     /// 3. `req.last_log_id >= local.last_log_id` — the candidate's history is at least as fresh as
@@ -474,10 +474,12 @@ where
             "AppendRequest terms and cmds must have the same length"
         );
 
-        let last_term = self.storage.last_term().await?;
+        let mut last_term = self.storage.last_term().await?;
         if append.term > last_term {
-            // TODO: save last-seen, instead of updating terms. Updating terms means accepting a
-            // RequestVote.
+            // Record the leader term before prev-log matching, just like standard Raft updates
+            // currentTerm before handling the rest of the RPC.
+            self.storage.update_terms(append.term, &[append.term]).await?;
+            last_term = append.term;
         } else if append.term < last_term {
             log::debug!(
                 "rejecting stale Append node={} append_term={} local_last_term={last_term}",
@@ -1128,6 +1130,44 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn request_vote_rejects_observed_term_in_incomplete_suffix() {
+        let mut core = new_core(vec![0, 1, 2, 6, 6, 6, 6], 3, Membership::new(vec![1, 2, 3]));
+
+        let req = RequestVote {
+            term: 6,
+            last_log_id: LogId::new(2, 2),
+        };
+
+        let reply = core.handle_request_vote(req).await.unwrap();
+
+        assert!(!reply.granted);
+        assert_eq!(reply.next_term_slot, 7);
+        assert_eq!(core.storage.terms_len().await.unwrap(), 7);
+    }
+
+    #[tokio::test]
+    async fn append_records_higher_term_before_prev_log_check() {
+        let mut core = new_core(vec![0], 1, Membership::new(vec![1, 2, 3]));
+
+        let append = AppendRequest {
+            term: 100,
+            commit_index: 0,
+            prev_log_id: LogId::new(99, 99),
+            terms: vec![],
+            cmds: vec![],
+        };
+
+        let reply = core.handle_append(append).await.unwrap();
+
+        assert_eq!(reply.term, 100);
+        assert!(reply.matched.is_none());
+        assert_eq!(reply.conflict, Some(99));
+        assert_eq!(core.storage.terms_len().await.unwrap(), 101);
+        assert_eq!(core.storage.last_term().await.unwrap(), 100);
+        assert_eq!(core.storage.cmds_len().await.unwrap(), 1);
+    }
+
+    #[tokio::test]
     async fn single_node_election_establishes_leader_from_self_vote() {
         let mut core = new_core(vec![0], 1, Membership::new(vec![1]));
 
@@ -1142,6 +1182,23 @@ mod tests {
         let metrics = core.metrics_snapshot().await.unwrap();
         assert_eq!(metrics.role, NodeRole::Leader);
         assert_eq!(metrics.term, 1);
+    }
+
+    #[tokio::test]
+    async fn election_uses_next_term_slot_after_observed_suffix_term() {
+        let mut terms = vec![0];
+        terms.extend(vec![100; 64]);
+        terms.extend(65..100);
+        terms.push(100);
+        let mut core = new_core(terms, 1, Membership::new(vec![1]));
+
+        core.do_elect().await.unwrap();
+
+        let leader = core.leader.as_ref().unwrap();
+        assert!(leader.established);
+        assert_eq!(leader.term, 101);
+        assert_eq!(core.storage.last_term().await.unwrap(), 101);
+        assert_eq!(core.storage.cmds_len().await.unwrap(), 102);
     }
 
     #[tokio::test]
