@@ -1,5 +1,10 @@
 # raf
 
+> **Declaration**: This approach is just the same as saving terms in the
+> separate first extra slot in the terms array. So it actually still stores the
+> term and has no value at all. Please do not read this as a useful design; it
+> is only a failed personal experiment.
+
 **`raf`** stands for **Raft without a separate [T]erm field** — an experimental
 exploration of the [Raft][raft] distributed agreement protocol that derives the
 leader term from an election-reserved log index instead of persisting
